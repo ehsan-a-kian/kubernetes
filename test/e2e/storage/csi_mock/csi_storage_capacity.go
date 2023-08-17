@@ -43,7 +43,7 @@ import (
 
 var _ = utils.SIGDescribe("CSI Mock volume storage capacity", func() {
 	f := framework.NewDefaultFramework("csi-mock-volumes-capacity")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 	m := newMockDriverSetup(f)
 
 	ginkgo.Context("storage capacity", func() {
@@ -180,7 +180,7 @@ var _ = utils.SIGDescribe("CSI Mock volume storage capacity", func() {
 				err = wait.PollImmediateUntilWithContext(ctx, time.Second, func(ctx context.Context) (done bool, err error) {
 					c, index, err := compareCSICalls(ctx, deterministicCalls, expected, m.driver.GetCalls)
 					if err != nil {
-						return true, fmt.Errorf("error waiting for expected CSI calls: %s", err)
+						return true, fmt.Errorf("error waiting for expected CSI calls: %w", err)
 					}
 					calls = c
 					if index == 0 {
@@ -320,7 +320,7 @@ var _ = utils.SIGDescribe("CSI Mock volume storage capacity", func() {
 		}
 		for _, t := range tests {
 			test := t
-			ginkgo.It(t.name, ginkgo.SpecTimeout(f.Timeouts.PodStart), func(ctx context.Context) {
+			ginkgo.It(t.name, ginkgo.NodeTimeout(f.Timeouts.PodStart), func(ctx context.Context) {
 				scName := "mock-csi-storage-capacity-" + f.UniqueName
 				m.init(ctx, testParameters{
 					registerDriver:  true,

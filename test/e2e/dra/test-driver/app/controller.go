@@ -28,7 +28,7 @@ import (
 	"sync"
 
 	v1 "k8s.io/api/core/v1"
-	resourcev1alpha1 "k8s.io/api/resource/v1alpha1"
+	resourcev1alpha2 "k8s.io/api/resource/v1alpha2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/informers"
@@ -38,30 +38,34 @@ import (
 )
 
 type Resources struct {
-	NodeLocal      bool
-	Nodes          []string
-	MaxAllocations int
-	Shareable      bool
+	DontSetReservedFor bool
+	NodeLocal          bool
+	Nodes              []string
+	MaxAllocations     int
+	Shareable          bool
 
 	// AllocateWrapper, if set, gets called for each Allocate call.
 	AllocateWrapper AllocateWrapperType
 }
 
-type AllocateWrapperType func(ctx context.Context, claim *resourcev1alpha1.ResourceClaim, claimParameters interface{},
-	class *resourcev1alpha1.ResourceClass, classParameters interface{}, selectedNode string,
-	handler func(ctx context.Context, claim *resourcev1alpha1.ResourceClaim, claimParameters interface{},
-		class *resourcev1alpha1.ResourceClass, classParameters interface{}, selectedNode string) (result *resourcev1alpha1.AllocationResult, err error),
-) (result *resourcev1alpha1.AllocationResult, err error)
+type AllocateWrapperType func(ctx context.Context, claimAllocations []*controller.ClaimAllocation,
+	selectedNode string,
+	handler func(ctx context.Context,
+		claimAllocations []*controller.ClaimAllocation,
+		selectedNode string),
+)
 
 type ExampleController struct {
 	clientset  kubernetes.Interface
 	resources  Resources
 	driverName string
 
-	// mutex must be locked at the gRPC call level.
 	mutex sync.Mutex
 	// allocated maps claim.UID to the node (if network-attached) or empty (if not).
 	allocated map[types.UID]string
+	// claimsPerNode counts how many claims are currently allocated for a node (non-empty key)
+	// or allocated for the entire cluster (empty key). Must be kept in sync with allocated.
+	claimsPerNode map[string]int
 
 	numAllocations, numDeallocations int64
 }
@@ -72,18 +76,20 @@ func NewController(clientset kubernetes.Interface, driverName string, resources 
 		resources:  resources,
 		driverName: driverName,
 
-		allocated: make(map[types.UID]string),
+		allocated:     make(map[types.UID]string),
+		claimsPerNode: make(map[string]int),
 	}
 	return c
 }
 
-func (c *ExampleController) Run(ctx context.Context, workers int) *ExampleController {
+func (c *ExampleController) Run(ctx context.Context, workers int) {
 	informerFactory := informers.NewSharedInformerFactory(c.clientset, 0 /* resync period */)
 	ctrl := controller.New(ctx, c.driverName, c, c.clientset, informerFactory)
+	ctrl.SetReservedFor(!c.resources.DontSetReservedFor)
 	informerFactory.Start(ctx.Done())
 	ctrl.Run(workers)
-
-	return c
+	// If we get here, the context was canceled and we can wait for informer factory goroutines.
+	informerFactory.Shutdown()
 }
 
 type parameters struct {
@@ -92,16 +98,6 @@ type parameters struct {
 }
 
 var _ controller.Driver = &ExampleController{}
-
-func (c *ExampleController) countAllocations(node string) int {
-	total := 0
-	for _, n := range c.allocated {
-		if n == node {
-			total++
-		}
-	}
-	return total
-}
 
 // GetNumAllocations returns the number of times that a claim was allocated.
 // Idempotent calls to Allocate that do not need to allocate the claim again do
@@ -123,7 +119,7 @@ func (c *ExampleController) GetNumDeallocations() int64 {
 	return c.numDeallocations
 }
 
-func (c *ExampleController) GetClassParameters(ctx context.Context, class *resourcev1alpha1.ResourceClass) (interface{}, error) {
+func (c *ExampleController) GetClassParameters(ctx context.Context, class *resourcev1alpha2.ResourceClass) (interface{}, error) {
 	if class.ParametersRef != nil {
 		if class.ParametersRef.APIGroup != "" ||
 			class.ParametersRef.Kind != "ConfigMap" {
@@ -134,7 +130,7 @@ func (c *ExampleController) GetClassParameters(ctx context.Context, class *resou
 	return nil, nil
 }
 
-func (c *ExampleController) GetClaimParameters(ctx context.Context, claim *resourcev1alpha1.ResourceClaim, class *resourcev1alpha1.ResourceClass, classParameters interface{}) (interface{}, error) {
+func (c *ExampleController) GetClaimParameters(ctx context.Context, claim *resourcev1alpha2.ResourceClaim, class *resourcev1alpha2.ResourceClass, classParameters interface{}) (interface{}, error) {
 	if claim.Spec.ParametersRef != nil {
 		if claim.Spec.ParametersRef.APIGroup != "" ||
 			claim.Spec.ParametersRef.Kind != "ConfigMap" {
@@ -148,23 +144,38 @@ func (c *ExampleController) GetClaimParameters(ctx context.Context, claim *resou
 func (c *ExampleController) readParametersFromConfigMap(ctx context.Context, namespace, name string) (map[string]string, error) {
 	configMap, err := c.clientset.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("get config map: %v", err)
+		return nil, fmt.Errorf("get config map: %w", err)
 	}
 	return configMap.Data, nil
 }
 
-func (c *ExampleController) Allocate(ctx context.Context, claim *resourcev1alpha1.ResourceClaim, claimParameters interface{}, class *resourcev1alpha1.ResourceClass, classParameters interface{}, selectedNode string) (result *resourcev1alpha1.AllocationResult, err error) {
+func (c *ExampleController) Allocate(ctx context.Context, claimAllocations []*controller.ClaimAllocation, selectedNode string) {
+
 	if c.resources.AllocateWrapper != nil {
-		return c.resources.AllocateWrapper(ctx, claim, claimParameters, class, classParameters, selectedNode, c.allocate)
+		c.resources.AllocateWrapper(ctx, claimAllocations, selectedNode, c.allocateOneByOne)
+	} else {
+		c.allocateOneByOne(ctx, claimAllocations, selectedNode)
 	}
-	return c.allocate(ctx, claim, claimParameters, class, classParameters, selectedNode)
+
+	return
 }
 
-// allocate simply copies parameters as JSON map into ResourceHandle.
-func (c *ExampleController) allocate(ctx context.Context, claim *resourcev1alpha1.ResourceClaim, claimParameters interface{}, class *resourcev1alpha1.ResourceClass, classParameters interface{}, selectedNode string) (result *resourcev1alpha1.AllocationResult, err error) {
+func (c *ExampleController) allocateOneByOne(ctx context.Context, claimAllocations []*controller.ClaimAllocation, selectedNode string) {
+	for _, ca := range claimAllocations {
+		allocationResult, err := c.allocateOne(ctx, ca.Claim, ca.ClaimParameters, ca.Class, ca.ClassParameters, selectedNode)
+		if err != nil {
+			ca.Error = fmt.Errorf("failed allocating claim %v", ca.Claim.UID)
+			continue
+		}
+		ca.Allocation = allocationResult
+	}
+}
+
+// allocate simply copies parameters as JSON map into a ResourceHandle.
+func (c *ExampleController) allocateOne(ctx context.Context, claim *resourcev1alpha2.ResourceClaim, claimParameters interface{}, class *resourcev1alpha2.ResourceClass, classParameters interface{}, selectedNode string) (result *resourcev1alpha2.AllocationResult, err error) {
 	logger := klog.LoggerWithValues(klog.LoggerWithName(klog.FromContext(ctx), "Allocate"), "claim", klog.KObj(claim), "uid", claim.UID)
 	defer func() {
-		logger.Info("done", "result", prettyPrint(result), "err", err)
+		logger.V(3).Info("done", "result", result, "err", err)
 	}()
 
 	c.mutex.Lock()
@@ -176,9 +187,9 @@ func (c *ExampleController) allocate(ctx context.Context, claim *resourcev1alpha
 		// Idempotent result - kind of. We don't check whether
 		// the parameters changed in the meantime. A real
 		// driver would have to do that.
-		logger.Info("already allocated")
+		logger.V(3).V(3).Info("already allocated")
 	} else {
-		logger.Info("starting", "selectedNode", selectedNode)
+		logger.V(3).Info("starting", "selectedNode", selectedNode)
 		if c.resources.NodeLocal {
 			node = selectedNode
 			if node == "" {
@@ -187,7 +198,7 @@ func (c *ExampleController) allocate(ctx context.Context, claim *resourcev1alpha
 				var viableNodes []string
 				for _, n := range c.resources.Nodes {
 					if c.resources.MaxAllocations == 0 ||
-						c.countAllocations(n) < c.resources.MaxAllocations {
+						c.claimsPerNode[n] < c.resources.MaxAllocations {
 						viableNodes = append(viableNodes, n)
 					}
 				}
@@ -197,9 +208,10 @@ func (c *ExampleController) allocate(ctx context.Context, claim *resourcev1alpha
 				// Pick randomly. We could also prefer the one with the least
 				// number of allocations (even spreading) or the most (packing).
 				node = viableNodes[rand.Intn(len(viableNodes))]
-				logger.Info("picked a node ourselves", "selectedNode", selectedNode)
-			} else if c.resources.MaxAllocations > 0 &&
-				c.countAllocations(node) >= c.resources.MaxAllocations {
+				logger.V(3).Info("picked a node ourselves", "selectedNode", selectedNode)
+			} else if !contains(c.resources.Nodes, node) ||
+				c.resources.MaxAllocations > 0 &&
+					c.claimsPerNode[node] >= c.resources.MaxAllocations {
 				return nil, fmt.Errorf("resources exhausted on node %q", node)
 			}
 		} else {
@@ -210,7 +222,7 @@ func (c *ExampleController) allocate(ctx context.Context, claim *resourcev1alpha
 		}
 	}
 
-	allocation := &resourcev1alpha1.AllocationResult{
+	allocation := &resourcev1alpha2.AllocationResult{
 		Shareable: c.resources.Shareable,
 	}
 	p := parameters{
@@ -221,9 +233,14 @@ func (c *ExampleController) allocate(ctx context.Context, claim *resourcev1alpha
 	toEnvVars("admin", classParameters, p.EnvVars)
 	data, err := json.Marshal(p)
 	if err != nil {
-		return nil, fmt.Errorf("encode parameters: %v", err)
+		return nil, fmt.Errorf("encode parameters: %w", err)
 	}
-	allocation.ResourceHandle = string(data)
+	allocation.ResourceHandles = []resourcev1alpha2.ResourceHandle{
+		{
+			DriverName: c.driverName,
+			Data:       string(data),
+		},
+	}
 	var nodes []string
 	if node != "" {
 		nodes = append(nodes, node)
@@ -248,42 +265,45 @@ func (c *ExampleController) allocate(ctx context.Context, claim *resourcev1alpha
 	if !alreadyAllocated {
 		c.numAllocations++
 		c.allocated[claim.UID] = node
+		c.claimsPerNode[node]++
 	}
 	return allocation, nil
 }
 
-func (c *ExampleController) Deallocate(ctx context.Context, claim *resourcev1alpha1.ResourceClaim) error {
+func (c *ExampleController) Deallocate(ctx context.Context, claim *resourcev1alpha2.ResourceClaim) error {
 	logger := klog.LoggerWithValues(klog.LoggerWithName(klog.FromContext(ctx), "Deallocate"), "claim", klog.KObj(claim), "uid", claim.UID)
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if _, ok := c.allocated[claim.UID]; !ok {
-		logger.Info("already deallocated")
+	node, ok := c.allocated[claim.UID]
+	if !ok {
+		logger.V(3).Info("already deallocated")
 		return nil
 	}
 
-	logger.Info("done")
+	logger.V(3).Info("done")
 	c.numDeallocations++
 	delete(c.allocated, claim.UID)
+	c.claimsPerNode[node]--
 	return nil
 }
 
 func (c *ExampleController) UnsuitableNodes(ctx context.Context, pod *v1.Pod, claims []*controller.ClaimAllocation, potentialNodes []string) (finalErr error) {
 	logger := klog.LoggerWithValues(klog.LoggerWithName(klog.FromContext(ctx), "UnsuitableNodes"), "pod", klog.KObj(pod))
-	logger.Info("starting", "claim", prettyPrintSlice(claims), "potentialNodes", potentialNodes)
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	logger.V(3).Info("starting", "claims", claims, "potentialNodes", potentialNodes)
 	defer func() {
 		// UnsuitableNodes is the same for all claims.
-		logger.Info("done", "unsuitableNodes", claims[0].UnsuitableNodes, "err", finalErr)
+		logger.V(3).Info("done", "unsuitableNodes", claims[0].UnsuitableNodes, "err", finalErr)
 	}()
+
 	if c.resources.MaxAllocations == 0 {
 		// All nodes are suitable.
 		return nil
 	}
 	if c.resources.NodeLocal {
-		allocationsPerNode := make(map[string]int)
-		for _, node := range c.resources.Nodes {
-			allocationsPerNode[node] = c.countAllocations(node)
-		}
 		for _, claim := range claims {
 			claim.UnsuitableNodes = nil
 			for _, node := range potentialNodes {
@@ -292,8 +312,8 @@ func (c *ExampleController) UnsuitableNodes(ctx context.Context, pod *v1.Pod, cl
 				// can only work if a node has capacity left
 				// for all of them. Also, nodes that the driver
 				// doesn't run on cannot be used.
-				if contains(c.resources.Nodes, node) &&
-					allocationsPerNode[node]+len(claims) > c.resources.MaxAllocations {
+				if !contains(c.resources.Nodes, node) ||
+					c.claimsPerNode[node]+len(claims) > c.resources.MaxAllocations {
 					claim.UnsuitableNodes = append(claim.UnsuitableNodes, node)
 				}
 			}
@@ -301,11 +321,11 @@ func (c *ExampleController) UnsuitableNodes(ctx context.Context, pod *v1.Pod, cl
 		return nil
 	}
 
-	allocations := c.countAllocations("")
+	allocations := c.claimsPerNode[""]
 	for _, claim := range claims {
 		claim.UnsuitableNodes = nil
 		for _, node := range potentialNodes {
-			if contains(c.resources.Nodes, node) &&
+			if !contains(c.resources.Nodes, node) ||
 				allocations+len(claims) > c.resources.MaxAllocations {
 				claim.UnsuitableNodes = append(claim.UnsuitableNodes, node)
 			}
@@ -334,24 +354,4 @@ func contains[T comparable](list []T, value T) bool {
 	}
 
 	return false
-}
-
-func prettyPrint[T any](obj *T) interface{} {
-	if obj == nil {
-		return "<nil>"
-	}
-	return *obj
-}
-
-// prettyPrintSlice prints the values the slice points to, not the pointers.
-func prettyPrintSlice[T any](slice []*T) interface{} {
-	var values []interface{}
-	for _, v := range slice {
-		if v == nil {
-			values = append(values, "<nil>")
-		} else {
-			values = append(values, *v)
-		}
-	}
-	return values
 }

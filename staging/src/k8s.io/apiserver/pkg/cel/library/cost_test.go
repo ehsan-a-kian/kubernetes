@@ -17,6 +17,7 @@ limitations under the License.
 package library
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -24,6 +25,8 @@ import (
 	"github.com/google/cel-go/checker"
 	"github.com/google/cel-go/ext"
 	expr "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
+
+	"k8s.io/apiserver/pkg/authorization/authorizer"
 )
 
 const (
@@ -225,10 +228,34 @@ func TestStringLibrary(t *testing.T) {
 			expectRuntimeCost:  3,
 		},
 		{
+			name:               "lowerAsciiEquals",
+			expr:               "'ABCDEFGHIJ abcdefghij'.lowerAscii() == 'abcdefghij ABCDEFGHIJ'.lowerAscii()",
+			expectEsimatedCost: checker.CostEstimate{Min: 7, Max: 9},
+			expectRuntimeCost:  9,
+		},
+		{
 			name:               "upperAscii",
 			expr:               "'ABCDEFGHIJ abcdefghij'.upperAscii()",
 			expectEsimatedCost: checker.CostEstimate{Min: 3, Max: 3},
 			expectRuntimeCost:  3,
+		},
+		{
+			name:               "upperAsciiEquals",
+			expr:               "'ABCDEFGHIJ abcdefghij'.upperAscii() == 'abcdefghij ABCDEFGHIJ'.upperAscii()",
+			expectEsimatedCost: checker.CostEstimate{Min: 7, Max: 9},
+			expectRuntimeCost:  9,
+		},
+		{
+			name:               "quote",
+			expr:               "strings.quote('ABCDEFGHIJ abcdefghij')",
+			expectEsimatedCost: checker.CostEstimate{Min: 3, Max: 3},
+			expectRuntimeCost:  3,
+		},
+		{
+			name:               "quoteEquals",
+			expr:               "strings.quote('ABCDEFGHIJ abcdefghij') == strings.quote('ABCDEFGHIJ abcdefghij')",
+			expectEsimatedCost: checker.CostEstimate{Min: 7, Max: 11},
+			expectRuntimeCost:  9,
 		},
 		{
 			name:               "replace",
@@ -311,9 +338,77 @@ func TestStringLibrary(t *testing.T) {
 	}
 }
 
+func TestAuthzLibrary(t *testing.T) {
+	cases := []struct {
+		name                string
+		expr                string
+		expectEstimatedCost checker.CostEstimate
+		expectRuntimeCost   uint64
+	}{
+		{
+			name:                "path",
+			expr:                "authorizer.path('/healthz')",
+			expectEstimatedCost: checker.CostEstimate{Min: 2, Max: 2},
+			expectRuntimeCost:   2,
+		},
+		{
+			name:                "resource",
+			expr:                "authorizer.group('apps').resource('deployments').subresource('status').namespace('test').name('backend')",
+			expectEstimatedCost: checker.CostEstimate{Min: 6, Max: 6},
+			expectRuntimeCost:   6,
+		},
+		{
+			name:                "path check allowed",
+			expr:                "authorizer.path('/healthz').check('get').allowed()",
+			expectEstimatedCost: checker.CostEstimate{Min: 350003, Max: 350003},
+			expectRuntimeCost:   350003,
+		},
+		{
+			name:                "resource check allowed",
+			expr:                "authorizer.group('apps').resource('deployments').subresource('status').namespace('test').name('backend').check('create').allowed()",
+			expectEstimatedCost: checker.CostEstimate{Min: 350007, Max: 350007},
+			expectRuntimeCost:   350007,
+		},
+		{
+			name:                "resource check reason",
+			expr:                "authorizer.group('apps').resource('deployments').subresource('status').namespace('test').name('backend').check('create').allowed()",
+			expectEstimatedCost: checker.CostEstimate{Min: 350007, Max: 350007},
+			expectRuntimeCost:   350007,
+		},
+		{
+			name:                "resource check errored",
+			expr:                "authorizer.group('apps').resource('deployments').subresource('status').namespace('test').name('backend').check('create').errored()",
+			expectEstimatedCost: checker.CostEstimate{Min: 350007, Max: 350007},
+			expectRuntimeCost:   350007,
+		},
+		{
+			name:                "resource check error",
+			expr:                "authorizer.group('apps').resource('deployments').subresource('status').namespace('test').name('backend').check('create').error()",
+			expectEstimatedCost: checker.CostEstimate{Min: 350007, Max: 350007},
+			expectRuntimeCost:   350007,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			testCost(t, tc.expr, tc.expectEstimatedCost, tc.expectRuntimeCost)
+		})
+	}
+}
+
 func testCost(t *testing.T, expr string, expectEsimatedCost checker.CostEstimate, expectRuntimeCost uint64) {
 	est := &CostEstimator{SizeEstimator: &testCostEstimator{}}
-	env, err := cel.NewEnv(append(k8sExtensionLibs, ext.Strings())...)
+	env, err := cel.NewEnv(
+		ext.Strings(),
+		URLs(),
+		Regex(),
+		Lists(),
+		Authz(),
+	)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	env, err = env.Extend(cel.Variable("authorizer", AuthorizerType))
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -332,7 +427,7 @@ func testCost(t *testing.T, expr string, expectEsimatedCost checker.CostEstimate
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
-	_, details, err := prog.Eval(map[string]interface{}{})
+	_, details, err := prog.Eval(map[string]interface{}{"authorizer": NewAuthorizerVal(nil, alwaysAllowAuthorizer{})})
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -360,4 +455,10 @@ func (t *testCostEstimator) EstimateSize(element checker.AstNode) *checker.SizeE
 
 func (t *testCostEstimator) EstimateCallCost(function, overloadId string, target *checker.AstNode, args []checker.AstNode) *checker.CallEstimate {
 	return nil
+}
+
+type alwaysAllowAuthorizer struct{}
+
+func (f alwaysAllowAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes) (authorizer.Decision, string, error) {
+	return authorizer.DecisionAllow, "", nil
 }

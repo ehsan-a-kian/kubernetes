@@ -95,7 +95,7 @@ const (
 
 var _ = SIGDescribe("Cluster size autoscaling [Slow]", func() {
 	f := framework.NewDefaultFramework("autoscaling")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 	var c clientset.Interface
 	var nodeCount int
 	var memAllocatableMb int
@@ -1035,7 +1035,7 @@ func runDrainTest(ctx context.Context, f *framework.Framework, migSizes map[stri
 	ginkgo.DeferCleanup(e2erc.DeleteRCAndWaitForGC, f.ClientSet, namespace, "reschedulable-pods")
 
 	ginkgo.By("Create a PodDisruptionBudget")
-	minAvailable := intstr.FromInt(numPods - pdbSize)
+	minAvailable := intstr.FromInt32(int32(numPods - pdbSize))
 	pdb := &policyv1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test_pdb",
@@ -1166,7 +1166,7 @@ func enableAutoscaler(nodePool string, minCount, maxCount int) error {
 
 	if err != nil {
 		klog.Errorf("Failed config update result: %s", output)
-		return fmt.Errorf("Failed to enable autoscaling: %v", err)
+		return fmt.Errorf("Failed to enable autoscaling: %w", err)
 	}
 	klog.Infof("Config update result: %s", output)
 
@@ -1190,7 +1190,7 @@ func disableAutoscaler(nodePool string, minCount, maxCount int) error {
 
 	if err != nil {
 		klog.Errorf("Failed config update result: %s", output)
-		return fmt.Errorf("Failed to disable autoscaling: %v", err)
+		return fmt.Errorf("Failed to disable autoscaling: %w", err)
 	}
 	klog.Infof("Config update result: %s", output)
 
@@ -1384,7 +1384,7 @@ func waitForCaPodsReadyInNamespace(ctx context.Context, f *framework.Framework, 
 	for start := time.Now(); time.Now().Before(start.Add(scaleUpTimeout)) && ctx.Err() == nil; time.Sleep(20 * time.Second) {
 		pods, err := c.CoreV1().Pods(f.Namespace.Name).List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to get pods: %v", err)
+			return fmt.Errorf("failed to get pods: %w", err)
 		}
 		notready = make([]string, 0)
 		for _, pod := range pods.Items {
@@ -1915,7 +1915,7 @@ func addKubeSystemPdbs(ctx context.Context, f *framework.Framework) error {
 		ginkgo.By(fmt.Sprintf("Create PodDisruptionBudget for %v", pdbData.label))
 		labelMap := map[string]string{"k8s-app": pdbData.label}
 		pdbName := fmt.Sprintf("test-pdb-for-%v", pdbData.label)
-		minAvailable := intstr.FromInt(pdbData.minAvailable)
+		minAvailable := intstr.FromInt32(int32(pdbData.minAvailable))
 		pdb := &policyv1.PodDisruptionBudget{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      pdbName,

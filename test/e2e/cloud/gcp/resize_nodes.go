@@ -46,7 +46,7 @@ func resizeRC(ctx context.Context, c clientset.Interface, ns, name string, repli
 
 var _ = SIGDescribe("Nodes [Disruptive]", func() {
 	f := framework.NewDefaultFramework("resize-nodes")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 	var systemPodsNo int32
 	var c clientset.Interface
 	var ns string
@@ -99,7 +99,7 @@ var _ = SIGDescribe("Nodes [Disruptive]", func() {
 				// Many e2e tests assume that the cluster is fully healthy before they start.  Wait until
 				// the cluster is restored to health.
 				ginkgo.By("waiting for system pods to successfully restart")
-				err := e2epod.WaitForPodsRunningReady(ctx, c, metav1.NamespaceSystem, systemPodsNo, 0, framework.PodReadyBeforeTimeout, map[string]string{})
+				err := e2epod.WaitForPodsRunningReady(ctx, c, metav1.NamespaceSystem, systemPodsNo, 0, framework.PodReadyBeforeTimeout)
 				framework.ExpectNoError(err)
 			})
 		})

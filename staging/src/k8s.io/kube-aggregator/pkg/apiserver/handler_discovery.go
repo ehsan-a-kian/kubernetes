@@ -292,9 +292,9 @@ func (dm *discoveryManager) fetchFreshDiscoveryForService(gv metav1.GroupVersion
 			lastUpdated: now,
 		}
 
-		// Save the resolve, because it is still useful in case other services
-		// are already marked dirty. THey can use it without making http request
-		dm.setCacheEntryForService(info.service, cached)
+		// Do not save the resolve as the legacy fallback only fetches
+		// one group version and an API Service may serve multiple
+		// group versions.
 		return &cached, nil
 
 	case http.StatusOK:
@@ -309,6 +309,18 @@ func (dm *discoveryManager) fetchFreshDiscoveryForService(gv metav1.GroupVersion
 		for _, g := range parsed.Items {
 			for _, v := range g.Versions {
 				discoMap[metav1.GroupVersion{Group: g.Name, Version: v.Version}] = v
+				for i := range v.Resources {
+					// avoid nil panics in v0.26.0-v0.26.3 client-go clients
+					// see https://github.com/kubernetes/kubernetes/issues/118361
+					if v.Resources[i].ResponseKind == nil {
+						v.Resources[i].ResponseKind = &metav1.GroupVersionKind{}
+					}
+					for j := range v.Resources[i].Subresources {
+						if v.Resources[i].Subresources[j].ResponseKind == nil {
+							v.Resources[i].Subresources[j].ResponseKind = &metav1.GroupVersionKind{}
+						}
+					}
+				}
 			}
 		}
 
@@ -421,7 +433,7 @@ func (dm *discoveryManager) Run(stopCh <-chan struct{}) {
 	}
 
 	// Ensure that apiregistration.k8s.io is the first group in the discovery group.
-	dm.mergedDiscoveryHandler.SetGroupVersionPriority(APIRegistrationGroupVersion, APIRegistrationGroupPriority, 0)
+	dm.mergedDiscoveryHandler.WithSource(discoveryendpoint.BuiltinSource).SetGroupVersionPriority(APIRegistrationGroupVersion, APIRegistrationGroupPriority, 0)
 
 	wait.PollUntil(1*time.Minute, func() (done bool, err error) {
 		dm.servicesLock.Lock()

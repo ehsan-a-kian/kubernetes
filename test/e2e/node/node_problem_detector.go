@@ -49,7 +49,7 @@ var _ = SIGDescribe("NodeProblemDetector", func() {
 		maxNodesToProcess = 10
 	)
 	f := framework.NewDefaultFramework("node-problem-detector")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
 	ginkgo.BeforeEach(func(ctx context.Context) {
 		e2eskipper.SkipUnlessSSHKeyPresent()
@@ -121,54 +121,30 @@ var _ = SIGDescribe("NodeProblemDetector", func() {
 				psCmd := "ps aux | grep [n]ode-problem-detector"
 				result, err = e2essh.SSH(ctx, psCmd, host, framework.TestContext.Provider)
 				framework.ExpectNoError(err)
-				framework.ExpectEqual(result.Code, 0)
+				gomega.Expect(result.Code).To(gomega.Equal(0))
 				gomega.Expect(result.Stdout).To(gomega.ContainSubstring("node-problem-detector"))
 
 				ginkgo.By(fmt.Sprintf("Check node-problem-detector is running fine on node %q", host))
 				journalctlCmd := "sudo journalctl -r -u node-problem-detector"
 				result, err = e2essh.SSH(ctx, journalctlCmd, host, framework.TestContext.Provider)
 				framework.ExpectNoError(err)
-				framework.ExpectEqual(result.Code, 0)
+				gomega.Expect(result.Code).To(gomega.Equal(0))
 				gomega.Expect(result.Stdout).NotTo(gomega.ContainSubstring("node-problem-detector.service: Failed"))
 
-				// Let's assume that node problem detector has started the same time as kubelet
-				// We only will check for the KubeletStart if parsing of date here succeed
-				// This is an optimization to not ssh one more time to get kubelet's start time.
-				// Also we assume specific datetime format to simplify the logic
-				output := result.Stdout
+				// We only will check for the KubeletStart even if parsing of date here succeeded.
+				ginkgo.By(fmt.Sprintf("Check when node-problem-detector started on node %q", host))
+				npdStartTimeCommand := "sudo systemctl show --timestamp=utc node-problem-detector -P ActiveEnterTimestamp"
+				result, err = e2essh.SSH(ctx, npdStartTimeCommand, host, framework.TestContext.Provider)
+				framework.ExpectNoError(err)
+				gomega.Expect(result.Code).To(gomega.Equal(0))
 
-				// searching for the line "Apr 14 04:47:42 gke-cluster-1-default-pool-b1565719-eqht systemd[1]: Started Kubernetes node problem detector." and fallback to
-				idx := strings.Index(output, "Started Kubernetes node problem detector")
-				if idx != -1 {
-					output = output[:idx]
-					idx = strings.LastIndex(output, "\n")
-
-					if idx != -1 {
-						output = output[0:15]
-					}
-
-					st, err := time.Parse("Jan 02 15:04:05", output)
-					st = st.AddDate(time.Now().Year(), 0, 0)
-
-					if err == nil {
-						checkForKubeletStart = time.Since(st) < time.Hour
-					}
+				// The time format matches the systemd format.
+				// 'utc': 'Day YYYY-MM-DD HH:MM:SS UTC (see https://www.freedesktop.org/software/systemd/man/systemd.time.html)
+				st, err := time.Parse("Mon 2006-01-02 15:04:05 MST", result.Stdout)
+				if err != nil {
+					framework.Logf("Failed to parse when NPD started. Got exit code: %v and stdout: %v, error: %v. Will skip check for kubelet start event.", result.Code, result.Stdout, err)
 				} else {
-					// fallback to searching the line:
-					// -- Logs begin at Thu 2022-04-28 17:32:39 UTC, end at Thu 2022-04-28 17:40:05 UTC. --
-					idx := strings.Index(output, ", end at ")
-
-					output = output[:idx]
-					idx = strings.LastIndex(output, "-- Logs begin at ")
-					if idx != -1 {
-						output = output[17:]
-					}
-
-					st, err := time.Parse("Mon 2006-01-02 15:04:05 MST", output)
-
-					if err == nil {
-						checkForKubeletStart = time.Since(st) < time.Hour
-					}
+					checkForKubeletStart = time.Since(st) < time.Hour
 				}
 
 				cpuUsage, uptime := getCPUStat(ctx, f, host)
@@ -181,7 +157,7 @@ var _ = SIGDescribe("NodeProblemDetector", func() {
 			injectLogCmd := "sudo sh -c \"echo 'kernel: " + log + "' >> /dev/kmsg\""
 			result, err = e2essh.SSH(ctx, injectLogCmd, host, framework.TestContext.Provider)
 			framework.ExpectNoError(err)
-			framework.ExpectEqual(result.Code, 0)
+			gomega.Expect(result.Code).To(gomega.Equal(0))
 		}
 
 		ginkgo.By("Check node-problem-detector can post conditions and events to API server")
@@ -321,7 +297,7 @@ func getMemoryStat(ctx context.Context, f *framework.Framework, host string) (rs
 
 	result, err := e2essh.SSH(ctx, memCmd, host, framework.TestContext.Provider)
 	framework.ExpectNoError(err)
-	framework.ExpectEqual(result.Code, 0)
+	gomega.Expect(result.Code).To(gomega.Equal(0))
 	lines := strings.Split(result.Stdout, "\n")
 
 	memoryUsage, err := strconv.ParseFloat(lines[0], 64)
@@ -375,7 +351,7 @@ func getCPUStat(ctx context.Context, f *framework.Framework, host string) (usage
 
 	result, err := e2essh.SSH(ctx, cpuCmd, host, framework.TestContext.Provider)
 	framework.ExpectNoError(err)
-	framework.ExpectEqual(result.Code, 0)
+	gomega.Expect(result.Code).To(gomega.Equal(0))
 	lines := strings.Split(result.Stdout, "\n")
 
 	usage, err = strconv.ParseFloat(lines[0], 64)
@@ -391,7 +367,7 @@ func getCPUStat(ctx context.Context, f *framework.Framework, host string) (usage
 func isHostRunningCgroupV2(ctx context.Context, f *framework.Framework, host string) bool {
 	result, err := e2essh.SSH(ctx, "stat -fc %T /sys/fs/cgroup/", host, framework.TestContext.Provider)
 	framework.ExpectNoError(err)
-	framework.ExpectEqual(result.Code, 0)
+	gomega.Expect(result.Code).To(gomega.Equal(0))
 
 	// 0x63677270 == CGROUP2_SUPER_MAGIC
 	// https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html

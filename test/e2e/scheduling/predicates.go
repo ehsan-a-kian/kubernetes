@@ -45,6 +45,7 @@ import (
 	admissionapi "k8s.io/pod-security-admission/api"
 
 	"github.com/onsi/ginkgo/v2"
+	"github.com/onsi/gomega"
 
 	// ensure libs have a chance to initialize
 	_ "github.com/stretchr/testify/assert"
@@ -58,7 +59,7 @@ const (
 var localStorageVersion = utilversion.MustParseSemantic("v1.8.0-beta.0")
 
 // variable populated in BeforeEach, never modified afterwards
-var workerNodes = sets.String{}
+var workerNodes = sets.Set[string]{}
 
 type pausePodConfig struct {
 	Name                              string
@@ -84,7 +85,7 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 	var RCName string
 	var ns string
 	f := framework.NewDefaultFramework("sched-pred")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
 	ginkgo.AfterEach(func(ctx context.Context) {
 		rc, err := cs.CoreV1().ReplicationControllers(ns).Get(ctx, RCName, metav1.GetOptions{})
@@ -271,7 +272,7 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 			}
 
 			// remove RuntimeClass
-			_ = cs.NodeV1beta1().RuntimeClasses().Delete(ctx, e2eruntimeclass.PreconfiguredRuntimeClassHandler, metav1.DeleteOptions{})
+			_ = cs.NodeV1().RuntimeClasses().Delete(ctx, e2eruntimeclass.PreconfiguredRuntimeClassHandler, metav1.DeleteOptions{})
 		})
 
 		ginkgo.It("verify pod overhead is accounted for", func(ctx context.Context) {
@@ -491,7 +492,7 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 		framework.ExpectNoError(e2epod.WaitForPodNotPending(ctx, cs, ns, labelPodName))
 		labelPod, err := cs.CoreV1().Pods(ns).Get(ctx, labelPodName, metav1.GetOptions{})
 		framework.ExpectNoError(err)
-		framework.ExpectEqual(labelPod.Spec.NodeName, nodeName)
+		gomega.Expect(labelPod.Spec.NodeName).To(gomega.Equal(nodeName))
 	})
 
 	// Test Nodes does not have any label, hence it should be impossible to schedule Pod with
@@ -578,7 +579,7 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 		framework.ExpectNoError(e2epod.WaitForPodNotPending(ctx, cs, ns, labelPodName))
 		labelPod, err := cs.CoreV1().Pods(ns).Get(ctx, labelPodName, metav1.GetOptions{})
 		framework.ExpectNoError(err)
-		framework.ExpectEqual(labelPod.Spec.NodeName, nodeName)
+		gomega.Expect(labelPod.Spec.NodeName).To(gomega.Equal(nodeName))
 	})
 
 	// 1. Run a pod to get an available node, then delete the pod
@@ -621,7 +622,7 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 		framework.ExpectNoError(e2epod.WaitForPodNotPending(ctx, cs, ns, tolerationPodName))
 		deployedPod, err := cs.CoreV1().Pods(ns).Get(ctx, tolerationPodName, metav1.GetOptions{})
 		framework.ExpectNoError(err)
-		framework.ExpectEqual(deployedPod.Spec.NodeName, nodeName)
+		gomega.Expect(deployedPod.Spec.NodeName).To(gomega.Equal(nodeName))
 	})
 
 	// 1. Run a pod to get an available node, then delete the pod
@@ -801,12 +802,12 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 				}
 			}
 			expected := replicas / len(nodeNames)
-			framework.ExpectEqual(numInNode1, expected, fmt.Sprintf("Pods are not distributed as expected on node %q", nodeNames[0]))
-			framework.ExpectEqual(numInNode2, expected, fmt.Sprintf("Pods are not distributed as expected on node %q", nodeNames[1]))
+			gomega.Expect(numInNode1).To(gomega.Equal(expected), fmt.Sprintf("Pods are not distributed as expected on node %q", nodeNames[0]))
+			gomega.Expect(numInNode2).To(gomega.Equal(expected), fmt.Sprintf("Pods are not distributed as expected on node %q", nodeNames[1]))
 		})
 	})
 
-	ginkgo.It("validates Pods with non-empty schedulingGates are blocked on scheduling [Feature:PodSchedulingReadiness] [alpha]", func(ctx context.Context) {
+	ginkgo.It("validates Pods with non-empty schedulingGates are blocked on scheduling", func(ctx context.Context) {
 		podLabel := "e2e-scheduling-gates"
 		replicas := 3
 		ginkgo.By(fmt.Sprintf("Creating a ReplicaSet with replicas=%v, carrying scheduling gates [foo bar]", replicas))
@@ -869,7 +870,7 @@ func patchPod(cs clientset.Interface, old, new *v1.Pod) (*v1.Pod, error) {
 	}
 	patchBytes, err := strategicpatch.CreateTwoWayMergePatch(oldData, newData, &v1.Pod{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create merge patch for Pod %q: %v", old.Name, err)
+		return nil, fmt.Errorf("failed to create merge patch for Pod %q: %w", old.Name, err)
 	}
 	return cs.CoreV1().Pods(new.Namespace).Patch(context.TODO(), new.Name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{})
 }
@@ -1029,8 +1030,8 @@ func verifyResult(ctx context.Context, c clientset.Interface, expectedScheduled 
 	framework.ExpectNoError(err)
 	scheduledPods, notScheduledPods := GetPodsScheduled(workerNodes, allPods)
 
-	framework.ExpectEqual(len(notScheduledPods), expectedNotScheduled, fmt.Sprintf("Not scheduled Pods: %#v", notScheduledPods))
-	framework.ExpectEqual(len(scheduledPods), expectedScheduled, fmt.Sprintf("Scheduled Pods: %#v", scheduledPods))
+	gomega.Expect(notScheduledPods).To(gomega.HaveLen(expectedNotScheduled), fmt.Sprintf("Not scheduled Pods: %#v", notScheduledPods))
+	gomega.Expect(scheduledPods).To(gomega.HaveLen(expectedScheduled), fmt.Sprintf("Scheduled Pods: %#v", scheduledPods))
 }
 
 // GetNodeThatCanRunPod trying to launch a pod without a label to get a node which can launch it
@@ -1154,7 +1155,7 @@ func createHostPortPodOnNode(ctx context.Context, f *framework.Framework, podNam
 }
 
 // GetPodsScheduled returns a number of currently scheduled and not scheduled Pods on worker nodes.
-func GetPodsScheduled(workerNodes sets.String, pods *v1.PodList) (scheduledPods, notScheduledPods []v1.Pod) {
+func GetPodsScheduled(workerNodes sets.Set[string], pods *v1.PodList) (scheduledPods, notScheduledPods []v1.Pod) {
 	for _, pod := range pods.Items {
 		if pod.Spec.NodeName != "" && workerNodes.Has(pod.Spec.NodeName) {
 			_, scheduledCondition := podutil.GetPodCondition(&pod.Status, v1.PodScheduled)

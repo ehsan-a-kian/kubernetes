@@ -18,7 +18,9 @@ package staticpod
 
 import (
 	"bytes"
+	"crypto/md5"
 	"fmt"
+	"hash"
 	"io"
 	"math"
 	"net/url"
@@ -32,6 +34,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/dump"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
@@ -90,7 +93,7 @@ func ComponentPod(container v1.Container, volumes map[string]v1.Volume, annotati
 func ComponentResources(cpu string) v1.ResourceRequirements {
 	return v1.ResourceRequirements{
 		Requests: v1.ResourceList{
-			v1.ResourceName(v1.ResourceCPU): resource.MustParse(cpu),
+			v1.ResourceCPU: resource.MustParse(cpu),
 		},
 	}
 }
@@ -239,20 +242,20 @@ func ReadStaticPodFromDisk(manifestPath string) (*v1.Pod, error) {
 }
 
 // LivenessProbe creates a Probe object with a HTTPGet handler
-func LivenessProbe(host, path string, port int, scheme v1.URIScheme) *v1.Probe {
+func LivenessProbe(host, path string, port int32, scheme v1.URIScheme) *v1.Probe {
 	// sets initialDelaySeconds same as periodSeconds to skip one period before running a check
 	return createHTTPProbe(host, path, port, scheme, 10, 15, 8, 10)
 }
 
 // ReadinessProbe creates a Probe object with a HTTPGet handler
-func ReadinessProbe(host, path string, port int, scheme v1.URIScheme) *v1.Probe {
+func ReadinessProbe(host, path string, port int32, scheme v1.URIScheme) *v1.Probe {
 	// sets initialDelaySeconds as '0' because we don't want to delay user infrastructure checks
 	// looking for "ready" status on kubeadm static Pods
 	return createHTTPProbe(host, path, port, scheme, 0, 15, 3, 1)
 }
 
 // StartupProbe creates a Probe object with a HTTPGet handler
-func StartupProbe(host, path string, port int, scheme v1.URIScheme, timeoutForControlPlane *metav1.Duration) *v1.Probe {
+func StartupProbe(host, path string, port int32, scheme v1.URIScheme, timeoutForControlPlane *metav1.Duration) *v1.Probe {
 	periodSeconds, timeoutForControlPlaneSeconds := int32(10), kubeadmconstants.DefaultControlPlaneTimeout.Seconds()
 	if timeoutForControlPlane != nil {
 		timeoutForControlPlaneSeconds = timeoutForControlPlane.Seconds()
@@ -264,13 +267,13 @@ func StartupProbe(host, path string, port int, scheme v1.URIScheme, timeoutForCo
 	return createHTTPProbe(host, path, port, scheme, periodSeconds, 15, failureThreshold, periodSeconds)
 }
 
-func createHTTPProbe(host, path string, port int, scheme v1.URIScheme, initialDelaySeconds, timeoutSeconds, failureThreshold, periodSeconds int32) *v1.Probe {
+func createHTTPProbe(host, path string, port int32, scheme v1.URIScheme, initialDelaySeconds, timeoutSeconds, failureThreshold, periodSeconds int32) *v1.Probe {
 	return &v1.Probe{
 		ProbeHandler: v1.ProbeHandler{
 			HTTPGet: &v1.HTTPGetAction{
 				Host:   host,
 				Path:   path,
-				Port:   intstr.FromInt(port),
+				Port:   intstr.FromInt32(port),
 				Scheme: scheme,
 			},
 		},
@@ -309,7 +312,7 @@ func GetSchedulerProbeAddress(cfg *kubeadmapi.ClusterConfiguration) string {
 // GetEtcdProbeEndpoint takes a kubeadm Etcd configuration object and attempts to parse
 // the first URL in the listen-metrics-urls argument, returning an etcd probe hostname,
 // port and scheme
-func GetEtcdProbeEndpoint(cfg *kubeadmapi.Etcd, isIPv6 bool) (string, int, v1.URIScheme) {
+func GetEtcdProbeEndpoint(cfg *kubeadmapi.Etcd, isIPv6 bool) (string, int32, v1.URIScheme) {
 	localhost := "127.0.0.1"
 	if isIPv6 {
 		localhost = "::1"
@@ -343,23 +346,29 @@ func GetEtcdProbeEndpoint(cfg *kubeadmapi.Etcd, isIPv6 bool) (string, int, v1.UR
 				port = p
 			}
 		}
-		return hostname, port, scheme
+		return hostname, int32(port), scheme
 	}
 	return localhost, kubeadmconstants.EtcdMetricsPort, v1.URISchemeHTTP
 }
 
 // ManifestFilesAreEqual compares 2 files. It returns true if their contents are equal, false otherwise
 func ManifestFilesAreEqual(path1, path2 string) (bool, error) {
-	content1, err := os.ReadFile(path1)
+	pod1, err := ReadStaticPodFromDisk(path1)
 	if err != nil {
 		return false, err
 	}
-	content2, err := os.ReadFile(path2)
+	pod2, err := ReadStaticPodFromDisk(path2)
 	if err != nil {
 		return false, err
 	}
 
-	return bytes.Equal(content1, content2), nil
+	hasher := md5.New()
+	DeepHashObject(hasher, pod1)
+	hash1 := hasher.Sum(nil)[0:]
+	DeepHashObject(hasher, pod2)
+	hash2 := hasher.Sum(nil)[0:]
+
+	return bytes.Equal(hash1, hash2), nil
 }
 
 // getProbeAddress returns a valid probe address.
@@ -381,4 +390,13 @@ func GetUsersAndGroups() (*users.UsersAndGroups, error) {
 		usersAndGroups, err = users.AddUsersAndGroups()
 	})
 	return usersAndGroups, err
+}
+
+// DeepHashObject writes specified object to hash using the spew library
+// which follows pointers and prints actual values of the nested objects
+// ensuring the hash does not change when a pointer changes.
+// Copied from k8s.io/kubernetes/pkg/util/hash/hash.go#DeepHashObject
+func DeepHashObject(hasher hash.Hash, objectToWrite interface{}) {
+	hasher.Reset()
+	fmt.Fprintf(hasher, "%v", dump.ForHash(objectToWrite))
 }

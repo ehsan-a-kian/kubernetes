@@ -43,7 +43,7 @@ import (
 
 const (
 	// total time to wait for cloudprovider or file system resize to finish
-	totalResizeWaitPeriod = 5 * time.Minute
+	totalResizeWaitPeriod = 10 * time.Minute
 )
 
 var _ = utils.SIGDescribe("[Feature:Flexvolumes] Mounted flexvolume expand[Slow]", func() {
@@ -61,7 +61,7 @@ var _ = utils.SIGDescribe("[Feature:Flexvolumes] Mounted flexvolume expand[Slow]
 	)
 
 	f := framework.NewDefaultFramework("mounted-flexvolume-expand")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 	ginkgo.BeforeEach(func(ctx context.Context) {
 		e2eskipper.SkipUnlessProviderIs("aws", "gce", "local")
 		e2eskipper.SkipUnlessMasterOSDistroIs("debian", "ubuntu", "gci", "custom")
@@ -141,7 +141,7 @@ var _ = utils.SIGDescribe("[Feature:Flexvolumes] Mounted flexvolume expand[Slow]
 		framework.ExpectEqual(len(pvs), 1)
 
 		ginkgo.By("Creating a deployment with the provisioned volume")
-		deployment, err := e2edeployment.CreateDeployment(ctx, c, int32(1), map[string]string{"test": "app"}, nodeKeyValueLabel, ns, pvcClaims, "")
+		deployment, err := e2edeployment.CreateDeployment(ctx, c, int32(1), map[string]string{"test": "app"}, nodeKeyValueLabel, ns, pvcClaims, admissionapi.LevelRestricted, "")
 		framework.ExpectNoError(err, "Failed creating deployment %v", err)
 		ginkgo.DeferCleanup(c.AppsV1().Deployments(ns).Delete, deployment.Name, metav1.DeleteOptions{})
 

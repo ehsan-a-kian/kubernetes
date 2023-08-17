@@ -26,7 +26,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -43,6 +42,7 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	cloudprovider "k8s.io/cloud-provider"
 	cloudcontrollerconfig "k8s.io/cloud-provider/app/config"
+	"k8s.io/cloud-provider/names"
 	"k8s.io/cloud-provider/options"
 	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/cli/globalflag"
@@ -58,6 +58,7 @@ import (
 	genericcontrollermanager "k8s.io/controller-manager/app"
 	"k8s.io/controller-manager/controller"
 	"k8s.io/controller-manager/pkg/clientbuilder"
+	cmfeatures "k8s.io/controller-manager/pkg/features"
 	controllerhealthz "k8s.io/controller-manager/pkg/healthz"
 	"k8s.io/controller-manager/pkg/informerfactory"
 	"k8s.io/controller-manager/pkg/leadermigration"
@@ -79,7 +80,7 @@ const (
 // NewCloudControllerManagerCommand creates a *cobra.Command object with default parameters
 // controllerInitFuncConstructors is a map of controller name(as defined by controllers flag in https://kubernetes.io/docs/reference/command-line-tools-reference/kube-controller-manager/#options) to their InitFuncConstructor.
 // additionalFlags provides controller specific flags to be included in the complete set of controller manager flags
-func NewCloudControllerManagerCommand(s *options.CloudControllerManagerOptions, cloudInitializer InitCloudFunc, controllerInitFuncConstructors map[string]ControllerInitFuncConstructor, additionalFlags cliflag.NamedFlagSets, stopCh <-chan struct{}) *cobra.Command {
+func NewCloudControllerManagerCommand(s *options.CloudControllerManagerOptions, cloudInitializer InitCloudFunc, controllerInitFuncConstructors map[string]ControllerInitFuncConstructor, controllerAliases map[string]string, additionalFlags cliflag.NamedFlagSets, stopCh <-chan struct{}) *cobra.Command {
 	logOptions := logs.NewOptions()
 
 	cmd := &cobra.Command{
@@ -95,7 +96,7 @@ the cloud specific control loops shipped with Kubernetes.`,
 				return err
 			}
 
-			c, err := s.Config(ControllerNames(controllerInitFuncConstructors), ControllersDisabledByDefault.List())
+			c, err := s.Config(ControllerNames(controllerInitFuncConstructors), ControllersDisabledByDefault.List(), controllerAliases, AllWebhooks, DisabledByDefaultWebhooks)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				return err
@@ -105,7 +106,7 @@ the cloud specific control loops shipped with Kubernetes.`,
 			cloud := cloudInitializer(completedConfig)
 			controllerInitializers := ConstructControllerInitializers(controllerInitFuncConstructors, completedConfig, cloud)
 
-			if err := Run(completedConfig, cloud, controllerInitializers, stopCh); err != nil {
+			if err := Run(completedConfig, cloud, controllerInitializers, make(map[string]WebhookHandler), stopCh); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				return err
 			}
@@ -122,7 +123,7 @@ the cloud specific control loops shipped with Kubernetes.`,
 	}
 
 	fs := cmd.Flags()
-	namedFlagSets := s.Flags(ControllerNames(controllerInitFuncConstructors), ControllersDisabledByDefault.List())
+	namedFlagSets := s.Flags(ControllerNames(controllerInitFuncConstructors), ControllersDisabledByDefault.List(), controllerAliases, AllWebhooks, DisabledByDefaultWebhooks)
 
 	globalFlagSet := namedFlagSets.FlagSet("global")
 	verflag.AddFlags(globalFlagSet)
@@ -160,7 +161,8 @@ the cloud specific control loops shipped with Kubernetes.`,
 }
 
 // Run runs the ExternalCMServer.  This should never exit.
-func Run(c *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, controllerInitializers map[string]InitFunc, stopCh <-chan struct{}) error {
+func Run(c *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface, controllerInitializers map[string]InitFunc, webhooks map[string]WebhookHandler,
+	stopCh <-chan struct{}) error {
 	// To help debugging, immediately log version
 	klog.Infof("Version: %+v", version.Get())
 
@@ -182,6 +184,16 @@ func Run(c *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface
 	if c.ComponentConfig.Generic.LeaderElection.LeaderElect {
 		electionChecker = leaderelection.NewLeaderHealthzAdaptor(time.Second * 20)
 		checks = append(checks, electionChecker)
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(cmfeatures.CloudControllerManagerWebhook) {
+		if len(webhooks) > 0 {
+			klog.Info("Webhook Handlers enabled: ", webhooks)
+			handler := newHandler(webhooks)
+			if _, _, err := c.WebhookSecureServing.Serve(handler, 0, stopCh); err != nil {
+				return err
+			}
+		}
 	}
 
 	healthzHandler := controllerhealthz.NewMutableHealthzHandler(checks...)
@@ -362,8 +374,20 @@ func ControllerNames(controllerInitFuncConstructors map[string]ControllerInitFun
 	return ret.List()
 }
 
-// ControllersDisabledByDefault is the controller disabled default when starting cloud-controller managers.
-var ControllersDisabledByDefault = sets.NewString()
+var (
+	// ControllersDisabledByDefault is the controller disabled default when starting cloud-controller managers.
+	ControllersDisabledByDefault = sets.NewString()
+
+	// AllWebhooks represents the list of all webhook options configured in
+	// this package.  This is empty because no webhooks are currently
+	// configured in this package.
+	AllWebhooks = []string{}
+
+	// DisabledByDefaultWebhooks represents the list of webhooks which must be
+	// explicitly enabled. This is empty because no webhooks are currently
+	// configured in this package.
+	DisabledByDefaultWebhooks = []string{}
+)
 
 // ConstructControllerInitializers is a map of controller name(as defined by controllers flag in https://kubernetes.io/docs/reference/command-line-tools-reference/kube-controller-manager/#options) to their InitFuncConstructor.
 // paired to their InitFunc.  This allows for structured downstream composition and subdivision.
@@ -417,25 +441,25 @@ var DefaultInitFuncConstructors = map[string]ControllerInitFuncConstructor{
 	// The cloud-node controller shares the "node-controller" identity with the cloud-node-lifecycle
 	// controller for historical reasons.  See
 	// https://github.com/kubernetes/kubernetes/pull/72764#issuecomment-453300990 for more context.
-	"cloud-node": {
+	names.CloudNodeController: {
 		InitContext: ControllerInitContext{
 			ClientName: "node-controller",
 		},
 		Constructor: StartCloudNodeControllerWrapper,
 	},
-	"cloud-node-lifecycle": {
+	names.CloudNodeLifecycleController: {
 		InitContext: ControllerInitContext{
 			ClientName: "node-controller",
 		},
 		Constructor: StartCloudNodeLifecycleControllerWrapper,
 	},
-	"service": {
+	names.ServiceLBController: {
 		InitContext: ControllerInitContext{
 			ClientName: "service-controller",
 		},
 		Constructor: StartServiceControllerWrapper,
 	},
-	"route": {
+	names.NodeRouteController: {
 		InitContext: ControllerInitContext{
 			ClientName: "route-controller",
 		},
@@ -467,17 +491,11 @@ func CreateControllerContext(s *cloudcontrollerconfig.CompletedConfig, clientBui
 		restMapper.Reset()
 	}, 30*time.Second, stop)
 
-	availableResources, err := GetAvailableResources(clientBuilder)
-	if err != nil {
-		return genericcontrollermanager.ControllerContext{}, err
-	}
-
 	ctx := genericcontrollermanager.ControllerContext{
 		ClientBuilder:                   clientBuilder,
 		InformerFactory:                 sharedInformers,
 		ObjectOrMetadataInformerFactory: informerfactory.NewInformerFactory(sharedInformers, metadataInformers),
 		RESTMapper:                      restMapper,
-		AvailableResources:              availableResources,
 		Stop:                            stop,
 		InformersStarted:                make(chan struct{}),
 		ResyncPeriod:                    ResyncPeriod(s),
@@ -485,35 +503,6 @@ func CreateControllerContext(s *cloudcontrollerconfig.CompletedConfig, clientBui
 	}
 	controllersmetrics.Register()
 	return ctx, nil
-}
-
-// GetAvailableResources gets the map which contains all available resources of the apiserver
-// TODO: In general, any controller checking this needs to be dynamic so
-// users don't have to restart their controller manager if they change the apiserver.
-// Until we get there, the structure here needs to be exposed for the construction of a proper ControllerContext.
-func GetAvailableResources(clientBuilder clientbuilder.ControllerClientBuilder) (map[schema.GroupVersionResource]bool, error) {
-	client := clientBuilder.ClientOrDie("controller-discovery")
-	discoveryClient := client.Discovery()
-	_, resourceMap, err := discoveryClient.ServerGroupsAndResources()
-	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("unable to get all supported resources from server: %v", err))
-	}
-	if len(resourceMap) == 0 {
-		return nil, fmt.Errorf("unable to get any supported resources from server")
-	}
-
-	allResources := map[schema.GroupVersionResource]bool{}
-	for _, apiResourceList := range resourceMap {
-		version, err := schema.ParseGroupVersion(apiResourceList.GroupVersion)
-		if err != nil {
-			return nil, err
-		}
-		for _, apiResource := range apiResourceList.APIResources {
-			allResources[version.WithResource(apiResource.Name)] = true
-		}
-	}
-
-	return allResources, nil
 }
 
 // ResyncPeriod returns a function which generates a duration each time it is

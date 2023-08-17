@@ -36,7 +36,7 @@ import (
 
 var _ = instrumentation.SIGDescribe("MetricsGrabber", func() {
 	f := framework.NewDefaultFramework("metrics-grabber")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 	var c, ec clientset.Interface
 	var grabber *e2emetrics.Grabber
 	ginkgo.BeforeEach(func(ctx context.Context) {
@@ -46,7 +46,7 @@ var _ = instrumentation.SIGDescribe("MetricsGrabber", func() {
 		gomega.Eventually(ctx, func() error {
 			grabber, err = e2emetrics.NewMetricsGrabber(ctx, c, ec, f.ClientConfig(), true, true, true, true, true, true)
 			if err != nil {
-				return fmt.Errorf("failed to create metrics grabber: %v", err)
+				return fmt.Errorf("failed to create metrics grabber: %w", err)
 			}
 			return nil
 		}, 5*time.Minute, 10*time.Second).Should(gomega.BeNil())

@@ -73,7 +73,7 @@ func restartAPIServer(ctx context.Context, node *v1.Node) error {
 	result, err := e2essh.SSH(ctx, cmd, net.JoinHostPort(controlPlaneAddress, e2essh.SSHPort), framework.TestContext.Provider)
 	if err != nil || result.Code != 0 {
 		e2essh.LogResult(result)
-		return fmt.Errorf("couldn't restart kube-apiserver: %v", err)
+		return fmt.Errorf("couldn't restart kube-apiserver: %w", err)
 	}
 	return nil
 }
@@ -81,7 +81,7 @@ func restartAPIServer(ctx context.Context, node *v1.Node) error {
 // This test requires that --feature-gates=APIServerIdentity=true be set on the apiserver
 var _ = SIGDescribe("kube-apiserver identity [Feature:APIServerIdentity]", func() {
 	f := framework.NewDefaultFramework("kube-apiserver-identity")
-	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
 	ginkgo.It("kube-apiserver identity should persist after restart [Disruptive]", func(ctx context.Context) {
 		e2eskipper.SkipUnlessProviderIs("gce")
