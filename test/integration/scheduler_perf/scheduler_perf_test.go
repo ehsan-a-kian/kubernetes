@@ -41,7 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	cacheddiscovery "k8s.io/client-go/discovery/cached"
+	cacheddiscovery "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/informers"
 	coreinformers "k8s.io/client-go/informers/core/v1"
@@ -1312,7 +1312,7 @@ func createPods(ctx context.Context, tb testing.TB, namespace string, cpo *creat
 // namespace are scheduled. Times out after 10 minutes because even at the
 // lowest observed QPS of ~10 pods/sec, a 5000-node test should complete.
 func waitUntilPodsScheduledInNamespace(ctx context.Context, tb testing.TB, podInformer coreinformers.PodInformer, namespace string, wantCount int) error {
-	return wait.PollImmediate(1*time.Second, 10*time.Minute, func() (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
 		select {
 		case <-ctx.Done():
 			return true, ctx.Err()

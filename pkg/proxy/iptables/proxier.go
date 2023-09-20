@@ -92,6 +92,7 @@ const (
 
 const sysctlRouteLocalnet = "net/ipv4/conf/all/route_localnet"
 const sysctlBridgeCallIPTables = "net/bridge/bridge-nf-call-iptables"
+const sysctlNFConntrackTCPBeLiberal = "net/netfilter/nf_conntrack_tcp_be_liberal"
 
 // internal struct for string service information
 type servicePortInfo struct {
@@ -134,19 +135,6 @@ func newEndpointInfo(baseInfo *proxy.BaseEndpointInfo, svcPortName *proxy.Servic
 		BaseEndpointInfo: baseInfo,
 		ChainName:        servicePortEndpointChainName(svcPortName.String(), strings.ToLower(string(svcPortName.Protocol)), baseInfo.Endpoint),
 	}
-}
-
-// Equal overrides the Equal() function implemented by proxy.BaseEndpointInfo.
-func (e *endpointsInfo) Equal(other proxy.Endpoint) bool {
-	o, ok := other.(*endpointsInfo)
-	if !ok {
-		klog.ErrorS(nil, "Failed to cast endpointsInfo")
-		return false
-	}
-	return e.Endpoint == o.Endpoint &&
-		e.IsLocal == o.IsLocal &&
-		e.ChainName == o.ChainName &&
-		e.Ready == o.Ready
 }
 
 // Proxier is an iptables based proxy for connections between a localhost:lport
@@ -209,6 +197,10 @@ type Proxier struct {
 	// localhostNodePorts indicates whether we allow NodePort services to be accessed
 	// via localhost.
 	localhostNodePorts bool
+
+	// conntrackTCPLiberal indicates whether the system sets the kernel nf_conntrack_tcp_be_liberal
+	conntrackTCPLiberal bool
+
 	// nodePortAddresses selects the interfaces where nodePort works.
 	nodePortAddresses *proxyutil.NodePortAddresses
 	// networkInterfacer defines an interface for several net library functions.
@@ -254,6 +246,14 @@ func NewProxier(ipFamily v1.IPFamily,
 		}
 	}
 
+	// Be conservative in what you do, be liberal in what you accept from others.
+	// If it's non-zero, we mark only out of window RST segments as INVALID.
+	// Ref: https://docs.kernel.org/networking/nf_conntrack-sysctl.html
+	conntrackTCPLiberal := false
+	if val, err := sysctl.GetSysctl(sysctlNFConntrackTCPBeLiberal); err == nil && val != 0 {
+		conntrackTCPLiberal = true
+		klog.InfoS("nf_conntrack_tcp_be_liberal set, not installing DROP rules for INVALID packets")
+	}
 	// Proxy needs br_netfilter and bridge-nf-call-iptables=1 when containers
 	// are connected to a Linux bridge (but not SDN bridges).  Until most
 	// plugins handle this, log when config is missing
@@ -295,6 +295,7 @@ func NewProxier(ipFamily v1.IPFamily,
 		localhostNodePorts:       localhostNodePorts,
 		nodePortAddresses:        nodePortAddresses,
 		networkInterfacer:        proxyutil.RealNetwork{},
+		conntrackTCPLiberal:      conntrackTCPLiberal,
 	}
 
 	burstSyncs := 2
@@ -1024,7 +1025,7 @@ func (proxier *Proxier) syncProxyRules() {
 		// create a firewall chain.
 		loadBalancerTrafficChain := externalTrafficChain
 		fwChain := svcInfo.firewallChainName
-		usesFWChain := hasEndpoints && len(svcInfo.LoadBalancerIPStrings()) > 0 && len(svcInfo.LoadBalancerSourceRanges()) > 0
+		usesFWChain := hasEndpoints && len(svcInfo.LoadBalancerVIPStrings()) > 0 && len(svcInfo.LoadBalancerSourceRanges()) > 0
 		if usesFWChain {
 			activeNATChains[fwChain] = true
 			loadBalancerTrafficChain = fwChain
@@ -1116,7 +1117,7 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 
 		// Capture load-balancer ingress.
-		for _, lbip := range svcInfo.LoadBalancerIPStrings() {
+		for _, lbip := range svcInfo.LoadBalancerVIPStrings() {
 			if hasEndpoints {
 				natRules.Write(
 					"-A", string(kubeServicesChain),
@@ -1141,7 +1142,7 @@ func (proxier *Proxier) syncProxyRules() {
 			// Either no endpoints at all (REJECT) or no endpoints for
 			// external traffic (DROP anything that didn't get short-circuited
 			// by the EXT chain.)
-			for _, lbip := range svcInfo.LoadBalancerIPStrings() {
+			for _, lbip := range svcInfo.LoadBalancerVIPStrings() {
 				filterRules.Write(
 					"-A", string(kubeExternalServicesChain),
 					"-m", "comment", "--comment", externalTrafficFilterComment,
@@ -1319,7 +1320,7 @@ func (proxier *Proxier) syncProxyRules() {
 			// will loop back with the source IP set to the VIP.  We
 			// need the following rules to allow requests from this node.
 			if allowFromNode {
-				for _, lbip := range svcInfo.LoadBalancerIPStrings() {
+				for _, lbip := range svcInfo.LoadBalancerVIPStrings() {
 					natRules.Write(
 						args,
 						"-s", lbip,
@@ -1456,14 +1457,17 @@ func (proxier *Proxier) syncProxyRules() {
 	}
 
 	// Drop the packets in INVALID state, which would potentially cause
-	// unexpected connection reset.
-	// https://github.com/kubernetes/kubernetes/issues/74839
-	proxier.filterRules.Write(
-		"-A", string(kubeForwardChain),
-		"-m", "conntrack",
-		"--ctstate", "INVALID",
-		"-j", "DROP",
-	)
+	// unexpected connection reset if nf_conntrack_tcp_be_liberal is not set.
+	// Ref: https://github.com/kubernetes/kubernetes/issues/74839
+	// Ref: https://github.com/kubernetes/kubernetes/issues/117924
+	if !proxier.conntrackTCPLiberal {
+		proxier.filterRules.Write(
+			"-A", string(kubeForwardChain),
+			"-m", "conntrack",
+			"--ctstate", "INVALID",
+			"-j", "DROP",
+		)
+	}
 
 	// If the masqueradeMark has been added then we want to forward that same
 	// traffic, this allows NodePort traffic to be forwarded even if the default

@@ -30,6 +30,7 @@ import (
 	"sync"
 
 	"github.com/pkg/errors"
+	"github.com/pmezard/go-difflib/difflib"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -188,9 +189,9 @@ func PatchStaticPod(pod *v1.Pod, patchesDir string, output io.Writer) (*v1.Pod, 
 		return pod, err
 	}
 
-	obj, err := kubeadmutil.UnmarshalFromYaml(patchTarget.Data, v1.SchemeGroupVersion)
+	obj, err := kubeadmutil.UniversalUnmarshal(patchTarget.Data)
 	if err != nil {
-		return pod, errors.Wrap(err, "failed to unmarshal patched manifest from YAML")
+		return pod, errors.Wrap(err, "failed to unmarshal patched manifest")
 	}
 
 	pod2, ok := obj.(*v1.Pod)
@@ -231,12 +232,15 @@ func ReadStaticPodFromDisk(manifestPath string) (*v1.Pod, error) {
 		return &v1.Pod{}, errors.Wrapf(err, "failed to read manifest for %q", manifestPath)
 	}
 
-	obj, err := kubeadmutil.UnmarshalFromYaml(buf, v1.SchemeGroupVersion)
+	obj, err := kubeadmutil.UniversalUnmarshal(buf)
 	if err != nil {
-		return &v1.Pod{}, errors.Errorf("failed to unmarshal manifest for %q from YAML: %v", manifestPath, err)
+		return &v1.Pod{}, errors.Errorf("failed to unmarshal manifest for %q: %v", manifestPath, err)
 	}
 
-	pod := obj.(*v1.Pod)
+	pod, ok := obj.(*v1.Pod)
+	if !ok {
+		return &v1.Pod{}, errors.Errorf("failed to parse Pod object defined in %q", manifestPath)
+	}
 
 	return pod, nil
 }
@@ -295,7 +299,7 @@ func GetAPIServerProbeAddress(endpoint *kubeadmapi.APIEndpoint) string {
 
 // GetControllerManagerProbeAddress returns the kubernetes controller manager probe address
 func GetControllerManagerProbeAddress(cfg *kubeadmapi.ClusterConfiguration) string {
-	if addr, exists := cfg.ControllerManager.ExtraArgs[kubeControllerManagerBindAddressArg]; exists {
+	if addr, idx := kubeadmapi.GetArgValue(cfg.ControllerManager.ExtraArgs, kubeControllerManagerBindAddressArg, -1); idx > -1 {
 		return getProbeAddress(addr)
 	}
 	return "127.0.0.1"
@@ -303,7 +307,7 @@ func GetControllerManagerProbeAddress(cfg *kubeadmapi.ClusterConfiguration) stri
 
 // GetSchedulerProbeAddress returns the kubernetes scheduler probe address
 func GetSchedulerProbeAddress(cfg *kubeadmapi.ClusterConfiguration) string {
-	if addr, exists := cfg.Scheduler.ExtraArgs[kubeSchedulerBindAddressArg]; exists {
+	if addr, idx := kubeadmapi.GetArgValue(cfg.Scheduler.ExtraArgs, kubeSchedulerBindAddressArg, -1); idx > -1 {
 		return getProbeAddress(addr)
 	}
 	return "127.0.0.1"
@@ -320,7 +324,7 @@ func GetEtcdProbeEndpoint(cfg *kubeadmapi.Etcd, isIPv6 bool) (string, int32, v1.
 	if cfg.Local == nil || cfg.Local.ExtraArgs == nil {
 		return localhost, kubeadmconstants.EtcdMetricsPort, v1.URISchemeHTTP
 	}
-	if arg, exists := cfg.Local.ExtraArgs["listen-metrics-urls"]; exists {
+	if arg, idx := kubeadmapi.GetArgValue(cfg.Local.ExtraArgs, "listen-metrics-urls", -1); idx > -1 {
 		// Use the first url in the listen-metrics-urls if multiple URL's are specified.
 		arg = strings.Split(arg, ",")[0]
 		parsedURL, err := url.Parse(arg)
@@ -352,14 +356,14 @@ func GetEtcdProbeEndpoint(cfg *kubeadmapi.Etcd, isIPv6 bool) (string, int32, v1.
 }
 
 // ManifestFilesAreEqual compares 2 files. It returns true if their contents are equal, false otherwise
-func ManifestFilesAreEqual(path1, path2 string) (bool, error) {
+func ManifestFilesAreEqual(path1, path2 string) (bool, string, error) {
 	pod1, err := ReadStaticPodFromDisk(path1)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	pod2, err := ReadStaticPodFromDisk(path2)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	hasher := md5.New()
@@ -367,8 +371,31 @@ func ManifestFilesAreEqual(path1, path2 string) (bool, error) {
 	hash1 := hasher.Sum(nil)[0:]
 	DeepHashObject(hasher, pod2)
 	hash2 := hasher.Sum(nil)[0:]
+	if bytes.Equal(hash1, hash2) {
+		return true, "", nil
+	}
 
-	return bytes.Equal(hash1, hash2), nil
+	manifest1, err := kubeadmutil.MarshalToYaml(pod1, v1.SchemeGroupVersion)
+	if err != nil {
+		return false, "", errors.Wrapf(err, "failed to marshal Pod manifest for %q to YAML", path1)
+	}
+
+	manifest2, err := kubeadmutil.MarshalToYaml(pod2, v1.SchemeGroupVersion)
+	if err != nil {
+		return false, "", errors.Wrapf(err, "failed to marshal Pod manifest for %q to YAML", path2)
+	}
+
+	diff := difflib.UnifiedDiff{
+		A: difflib.SplitLines(string(manifest1)),
+		B: difflib.SplitLines(string(manifest2)),
+	}
+
+	diffStr, err := difflib.GetUnifiedDiffString(diff)
+	if err != nil {
+		return false, "", errors.Wrapf(err, "failed to generate the differences between manifest %q and manifest %q", path1, path2)
+	}
+
+	return false, diffStr, nil
 }
 
 // getProbeAddress returns a valid probe address.

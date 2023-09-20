@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
@@ -312,7 +313,7 @@ func TestNamespaceScopedWatch(t *testing.T) {
 func TestWatchDispatchBookmarkEvents(t *testing.T) {
 	ctx, cacher, terminate := testSetup(t)
 	t.Cleanup(terminate)
-	storagetesting.RunTestWatchDispatchBookmarkEvents(ctx, t, cacher)
+	storagetesting.RunTestWatchDispatchBookmarkEvents(ctx, t, cacher, true)
 }
 
 func TestWatchBookmarksWithCorrectResourceVersion(t *testing.T) {
@@ -325,6 +326,18 @@ func TestSendInitialEventsBackwardCompatibility(t *testing.T) {
 	ctx, store, terminate := testSetup(t)
 	t.Cleanup(terminate)
 	storagetesting.RunSendInitialEventsBackwardCompatibility(ctx, t, store)
+}
+
+func TestCacherWatchSemantics(t *testing.T) {
+	store, terminate := testSetupWithEtcdAndCreateWrapper(t)
+	t.Cleanup(terminate)
+	storagetesting.RunWatchSemantics(context.TODO(), t, store)
+}
+
+func TestCacherWatchSemanticInitialEventsExtended(t *testing.T) {
+	store, terminate := testSetupWithEtcdAndCreateWrapper(t)
+	t.Cleanup(terminate)
+	storagetesting.RunWatchSemanticInitialEventsExtended(context.TODO(), t, store)
 }
 
 // ===================================================
@@ -423,4 +436,37 @@ func testSetupWithEtcdServer(t *testing.T, opts ...setupOption) (context.Context
 	}
 
 	return ctx, cacher, server, terminate
+}
+
+func testSetupWithEtcdAndCreateWrapper(t *testing.T, opts ...setupOption) (storage.Interface, tearDownFunc) {
+	_, cacher, _, tearDown := testSetupWithEtcdServer(t, opts...)
+
+	if err := cacher.ready.wait(context.TODO()); err != nil {
+		t.Fatalf("unexpected error waiting for the cache to be ready")
+	}
+	return &createWrapper{Cacher: cacher}, tearDown
+}
+
+type createWrapper struct {
+	*Cacher
+}
+
+func (c *createWrapper) Create(ctx context.Context, key string, obj, out runtime.Object, ttl uint64) error {
+	if err := c.Cacher.Create(ctx, key, obj, out, ttl); err != nil {
+		return err
+	}
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, wait.ForeverTestTimeout, true, func(ctx context.Context) (bool, error) {
+		currentObj := c.Cacher.newFunc()
+		err := c.Cacher.Get(ctx, key, storage.GetOptions{ResourceVersion: "0"}, currentObj)
+		if err != nil {
+			if storage.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		if !apiequality.Semantic.DeepEqual(currentObj, out) {
+			return false, nil
+		}
+		return true, nil
+	})
 }

@@ -207,7 +207,7 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 	// Math for GracePeriod is explained at - https://github.com/kubernetes/kubernetes/blob/c9ed04762f94a319d7b1fb718dc345491a32bea6/staging/src/k8s.io/apiserver/pkg/server/options/encryptionconfig/config.go#L159-L163
 	expectedKMSCloseGracePeriod := 46 * time.Second
 	correctConfigWithIdentityFirst := "testdata/valid-configs/identity-first.yaml"
-	identityFirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithIdentityFirst, false)
+	identityFirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithIdentityFirst, false, "")
 	if err != nil {
 		t.Fatalf("error while parsing configuration file: %s.\nThe file was:\n%s", err, correctConfigWithIdentityFirst)
 	}
@@ -218,7 +218,7 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 	// Math for GracePeriod is explained at - https://github.com/kubernetes/kubernetes/blob/c9ed04762f94a319d7b1fb718dc345491a32bea6/staging/src/k8s.io/apiserver/pkg/server/options/encryptionconfig/config.go#L159-L163
 	expectedKMSCloseGracePeriod = 32 * time.Second
 	correctConfigWithAesGcmFirst := "testdata/valid-configs/aes-gcm-first.yaml"
-	aesGcmFirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithAesGcmFirst, false)
+	aesGcmFirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithAesGcmFirst, false, "")
 	if err != nil {
 		t.Fatalf("error while parsing configuration file: %s.\nThe file was:\n%s", err, correctConfigWithAesGcmFirst)
 	}
@@ -227,7 +227,7 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 	}
 
 	invalidConfigWithAesGcm := "testdata/invalid-configs/invalid-aes-gcm.yaml"
-	_, err = LoadEncryptionConfig(ctx, invalidConfigWithAesGcm, false)
+	_, err = LoadEncryptionConfig(ctx, invalidConfigWithAesGcm, false, "")
 	if !strings.Contains(errString(err), "error while parsing file") {
 		t.Fatalf("should result in error while parsing configuration file: %s.\nThe file was:\n%s", err, invalidConfigWithAesGcm)
 	}
@@ -235,7 +235,7 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 	// Math for GracePeriod is explained at - https://github.com/kubernetes/kubernetes/blob/c9ed04762f94a319d7b1fb718dc345491a32bea6/staging/src/k8s.io/apiserver/pkg/server/options/encryptionconfig/config.go#L159-L163
 	expectedKMSCloseGracePeriod = 26 * time.Second
 	correctConfigWithAesCbcFirst := "testdata/valid-configs/aes-cbc-first.yaml"
-	aesCbcFirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithAesCbcFirst, false)
+	aesCbcFirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithAesCbcFirst, false, "")
 	if err != nil {
 		t.Fatalf("error while parsing configuration file: %s.\nThe file was:\n%s", err, correctConfigWithAesCbcFirst)
 	}
@@ -246,7 +246,7 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 	// Math for GracePeriod is explained at - https://github.com/kubernetes/kubernetes/blob/c9ed04762f94a319d7b1fb718dc345491a32bea6/staging/src/k8s.io/apiserver/pkg/server/options/encryptionconfig/config.go#L159-L163
 	expectedKMSCloseGracePeriod = 14 * time.Second
 	correctConfigWithSecretboxFirst := "testdata/valid-configs/secret-box-first.yaml"
-	secretboxFirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithSecretboxFirst, false)
+	secretboxFirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithSecretboxFirst, false, "")
 	if err != nil {
 		t.Fatalf("error while parsing configuration file: %s.\nThe file was:\n%s", err, correctConfigWithSecretboxFirst)
 	}
@@ -257,7 +257,7 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 	// Math for GracePeriod is explained at - https://github.com/kubernetes/kubernetes/blob/c9ed04762f94a319d7b1fb718dc345491a32bea6/staging/src/k8s.io/apiserver/pkg/server/options/encryptionconfig/config.go#L159-L163
 	expectedKMSCloseGracePeriod = 34 * time.Second
 	correctConfigWithKMSFirst := "testdata/valid-configs/kms-first.yaml"
-	kmsFirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithKMSFirst, false)
+	kmsFirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithKMSFirst, false, "")
 	if err != nil {
 		t.Fatalf("error while parsing configuration file: %s.\nThe file was:\n%s", err, correctConfigWithKMSFirst)
 	}
@@ -268,7 +268,7 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 	// Math for GracePeriod is explained at - https://github.com/kubernetes/kubernetes/blob/c9ed04762f94a319d7b1fb718dc345491a32bea6/staging/src/k8s.io/apiserver/pkg/server/options/encryptionconfig/config.go#L159-L163
 	expectedKMSCloseGracePeriod = 42 * time.Second
 	correctConfigWithKMSv2First := "testdata/valid-configs/kmsv2-first.yaml"
-	kmsv2FirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithKMSv2First, false)
+	kmsv2FirstEncryptionConfiguration, err := LoadEncryptionConfig(ctx, correctConfigWithKMSv2First, false, "")
 	if err != nil {
 		t.Fatalf("error while parsing configuration file: %s.\nThe file was:\n%s", err, correctConfigWithKMSv2First)
 	}
@@ -343,9 +343,158 @@ func TestKMSv1Deprecation(t *testing.T) {
 			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv1, testCase.kmsv1Enabled)()
 
 			kmsv1Config := "testdata/valid-configs/kms/multiple-providers.yaml"
-			_, err := LoadEncryptionConfig(testContext(t), kmsv1Config, false)
+			_, err := LoadEncryptionConfig(testContext(t), kmsv1Config, false, "")
 			if !strings.Contains(errString(err), testCase.expectedErr) {
 				t.Fatalf("expected error %q, got %q", testCase.expectedErr, errString(err))
+			}
+		})
+	}
+}
+
+func TestKMSvsEnablement(t *testing.T) {
+	testCases := []struct {
+		name         string
+		kmsv2Enabled bool
+		filePath     string
+		expectedErr  string
+	}{
+		{
+			name:         "config with kmsv2 and kmsv1, KMSv2=false",
+			kmsv2Enabled: false,
+			filePath:     "testdata/valid-configs/kms/multiple-providers-kmsv2.yaml",
+			expectedErr:  "KMSv2 feature is not enabled",
+		},
+		{
+			name:         "config with kmsv2 and kmsv1, KMSv2=true",
+			kmsv2Enabled: true,
+			filePath:     "testdata/valid-configs/kms/multiple-providers-kmsv2.yaml",
+			expectedErr:  "",
+		},
+		{
+			name:         "config with kmsv1, KMSv2=false",
+			kmsv2Enabled: false,
+			filePath:     "testdata/valid-configs/kms/multiple-providers.yaml",
+			expectedErr:  "",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			// Just testing KMSv2 feature flag
+			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv1, true)()
+
+			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv2, testCase.kmsv2Enabled)()
+			_, err := LoadEncryptionConfig(testContext(t), testCase.filePath, false, "")
+
+			if !strings.Contains(errString(err), testCase.expectedErr) {
+				t.Fatalf("expected error %q, got %q", testCase.expectedErr, errString(err))
+			}
+
+		})
+	}
+	tts := []struct {
+		name            string
+		kmsv2Enabled    bool
+		expectedErr     string
+		expectedTimeout time.Duration
+		config          apiserverconfig.EncryptionConfiguration
+		wantV2Used      bool
+	}{
+		{
+			name:         "with kmsv1 and kmsv2, KMSv2=false",
+			kmsv2Enabled: false,
+			config: apiserverconfig.EncryptionConfiguration{
+				Resources: []apiserverconfig.ResourceConfiguration{
+					{
+						Resources: []string{"secrets"},
+						Providers: []apiserverconfig.ProviderConfiguration{
+							{
+								KMS: &apiserverconfig.KMSConfiguration{
+									Name:       "kms",
+									APIVersion: "v1",
+									Timeout: &metav1.Duration{
+										Duration: 1 * time.Second,
+									},
+									Endpoint:  "unix:///tmp/testprovider.sock",
+									CacheSize: pointer.Int32(1000),
+								},
+							},
+							{
+								KMS: &apiserverconfig.KMSConfiguration{
+									Name:       "another-kms",
+									APIVersion: "v2",
+									Timeout: &metav1.Duration{
+										Duration: 1 * time.Second,
+									},
+									Endpoint:  "unix:///tmp/anothertestprovider.sock",
+									CacheSize: pointer.Int32(1000),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedErr: "KMSv2 feature is not enabled",
+			wantV2Used:  false,
+		},
+		{
+			name:         "with kmsv1 and kmsv2, KMSv2=true",
+			kmsv2Enabled: true,
+			config: apiserverconfig.EncryptionConfiguration{
+				Resources: []apiserverconfig.ResourceConfiguration{
+					{
+						Resources: []string{"secrets"},
+						Providers: []apiserverconfig.ProviderConfiguration{
+							{
+								KMS: &apiserverconfig.KMSConfiguration{
+									Name:       "kms",
+									APIVersion: "v1",
+									Timeout: &metav1.Duration{
+										Duration: 1 * time.Second,
+									},
+									Endpoint:  "unix:///tmp/testprovider.sock",
+									CacheSize: pointer.Int32(1000),
+								},
+							},
+							{
+								KMS: &apiserverconfig.KMSConfiguration{
+									Name:       "another-kms",
+									APIVersion: "v2",
+									Timeout: &metav1.Duration{
+										Duration: 1 * time.Second,
+									},
+									Endpoint:  "unix:///tmp/anothertestprovider.sock",
+									CacheSize: pointer.Int32(1000),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedErr: "",
+			wantV2Used:  true,
+		},
+	}
+
+	for _, tt := range tts {
+		t.Run(tt.name, func(t *testing.T) {
+			// Just testing KMSv2 feature flag
+			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv1, true)()
+
+			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv2, tt.kmsv2Enabled)()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // cancel this upfront so the kms v2 checks do not block
+
+			_, _, kmsUsed, err := getTransformerOverridesAndKMSPluginHealthzCheckers(ctx, &tt.config, "")
+			if err == nil {
+				if kmsUsed == nil || kmsUsed.v2Used != tt.wantV2Used {
+					t.Fatalf("unexpected kmsUsed value, expected: %v, got: %v", tt.wantV2Used, kmsUsed)
+				}
+
+			}
+			if !strings.Contains(errString(err), tt.expectedErr) {
+				t.Fatalf("expecting error calling prefixTransformersAndProbes, expected: %s, got: %s", tt.expectedErr, errString(err))
 			}
 		})
 	}
@@ -580,7 +729,7 @@ func TestKMSMaxTimeout(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel() // cancel this upfront so the kms v2 checks do not block
 
-			_, _, kmsUsed, err := getTransformerOverridesAndKMSPluginHealthzCheckers(ctx, &testCase.config)
+			_, _, kmsUsed, err := getTransformerOverridesAndKMSPluginHealthzCheckers(ctx, &testCase.config, "")
 
 			if !strings.Contains(errString(err), testCase.expectedErr) {
 				t.Fatalf("expecting error calling prefixTransformersAndProbes, expected: %s, got: %s", testCase.expectedErr, errString(err))
@@ -603,8 +752,9 @@ func TestKMSPluginHealthz(t *testing.T) {
 	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv2, true)()
 
 	kmsv2Probe := &kmsv2PluginProbe{
-		name: "foo",
-		ttl:  3 * time.Second,
+		name:        "foo",
+		ttl:         3 * time.Second,
+		apiServerID: "",
 	}
 	keyID := "1"
 	kmsv2Probe.state.Store(&envelopekmsv2.State{EncryptedObject: kmstypes.EncryptedObject{KeyID: keyID}})
@@ -704,7 +854,7 @@ func TestKMSPluginHealthz(t *testing.T) {
 
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel() // cancel this upfront so the kms v2 healthz check poll does not run
-			_, got, kmsUsed, err := getTransformerOverridesAndKMSPluginProbes(ctx, config)
+			_, got, kmsUsed, err := getTransformerOverridesAndKMSPluginProbes(ctx, config, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1149,7 +1299,7 @@ func TestWildcardMasking(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
 
-			_, _, _, err := getTransformerOverridesAndKMSPluginProbes(ctx, tc.config)
+			_, _, _, err := getTransformerOverridesAndKMSPluginProbes(ctx, tc.config, "")
 			if errString(err) != tc.expectedError {
 				t.Errorf("expected error %s but got %s", tc.expectedError, errString(err))
 			}
@@ -1304,7 +1454,7 @@ func TestWildcardStructure(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
 
-			transformers, _, _, err := getTransformerOverridesAndKMSPluginProbes(ctx, tc.config)
+			transformers, _, _, err := getTransformerOverridesAndKMSPluginProbes(ctx, tc.config, "")
 			if errString(err) != tc.errorValue {
 				t.Errorf("expected error %s but got %s", tc.errorValue, errString(err))
 			}
@@ -1575,7 +1725,7 @@ func getTransformerFromEncryptionConfig(t *testing.T, encryptionConfigPath strin
 	ctx := testContext(t)
 
 	t.Helper()
-	encryptionConfiguration, err := LoadEncryptionConfig(ctx, encryptionConfigPath, false)
+	encryptionConfiguration, err := LoadEncryptionConfig(ctx, encryptionConfigPath, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1690,6 +1840,8 @@ func TestComputeEncryptionConfigHash(t *testing.T) {
 }
 
 func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
+	defaultUseSeed := utilfeature.DefaultFeatureGate.Enabled(features.KMSv2KDF)
+
 	origNowFunc := envelopekmsv2.NowFunc
 	now := origNowFunc() // freeze time
 	t.Cleanup(func() { envelopekmsv2.NowFunc = origNowFunc })
@@ -1739,7 +1891,7 @@ func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
 		{
 			name:        "happy path, with previous state",
 			service:     &testKMSv2EnvelopeService{err: fmt.Errorf("broken")}, // not called
-			state:       validState(t, "2", now),
+			state:       validState(t, "2", now, false),
 			statusKeyID: "2",
 			wantState: envelopekmsv2.State{
 				EncryptedObject:     kmstypes.EncryptedObject{KeyID: "2"},
@@ -1752,7 +1904,7 @@ func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
 		{
 			name:        "happy path, with previous state, useSeed=true",
 			service:     &testKMSv2EnvelopeService{keyID: "2"},
-			state:       validState(t, "2", now),
+			state:       validState(t, "2", now, false),
 			useSeed:     true,
 			statusKeyID: "2",
 			wantState: envelopekmsv2.State{
@@ -1768,9 +1920,72 @@ func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
 			wantErr: "",
 		},
 		{
+			name:        "happy path, with previous useSeed=true state",
+			service:     &testKMSv2EnvelopeService{keyID: "2"},
+			state:       validState(t, "2", now, true),
+			statusKeyID: "2",
+			wantState: envelopekmsv2.State{
+				EncryptedObject:     kmstypes.EncryptedObject{KeyID: "2"},
+				ExpirationTimestamp: now.Add(3 * time.Minute),
+			},
+			wantEncryptCalls: 1,
+			wantLogs: []string{
+				`"encrypting content using envelope service" uid="panda"`,
+				fmt.Sprintf(`"successfully rotated DEK" uid="panda" useSeed=false newKeyIDHash="sha256:d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35" oldKeyIDHash="sha256:d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35" expirationTimestamp="%s"`,
+					now.Add(3*time.Minute).Format(time.RFC3339)),
+			},
+			wantErr: "",
+		},
+		{
+			name:        "happy path, with previous useSeed=true state, useSeed=true",
+			service:     &testKMSv2EnvelopeService{keyID: "2"},
+			state:       validState(t, "2", now, true),
+			useSeed:     true,
+			statusKeyID: "2",
+			wantState: envelopekmsv2.State{
+				EncryptedObject:     kmstypes.EncryptedObject{KeyID: "2", EncryptedDEKSourceType: kmstypes.EncryptedDEKSourceType_HKDF_SHA256_XNONCE_AES_GCM_SEED},
+				ExpirationTimestamp: now.Add(3 * time.Minute),
+			},
+			wantEncryptCalls: 0,
+			wantLogs:         nil,
+			wantErr:          "",
+		},
+		{
+			name:        "happy path, with previous state, useSeed=default",
+			service:     &testKMSv2EnvelopeService{keyID: "2"},
+			state:       validState(t, "2", now, false),
+			useSeed:     defaultUseSeed,
+			statusKeyID: "2",
+			wantState: envelopekmsv2.State{
+				EncryptedObject:     kmstypes.EncryptedObject{KeyID: "2", EncryptedDEKSourceType: kmstypes.EncryptedDEKSourceType_HKDF_SHA256_XNONCE_AES_GCM_SEED},
+				ExpirationTimestamp: now.Add(3 * time.Minute),
+			},
+			wantEncryptCalls: 1,
+			wantLogs: []string{
+				`"encrypting content using envelope service" uid="panda"`,
+				fmt.Sprintf(`"successfully rotated DEK" uid="panda" useSeed=true newKeyIDHash="sha256:d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35" oldKeyIDHash="sha256:d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35" expirationTimestamp="%s"`,
+					now.Add(3*time.Minute).Format(time.RFC3339)),
+			},
+			wantErr: "",
+		},
+		{
+			name:        "happy path, with previous useSeed=true state, useSeed=default",
+			service:     &testKMSv2EnvelopeService{keyID: "2"},
+			state:       validState(t, "2", now, true),
+			useSeed:     defaultUseSeed,
+			statusKeyID: "2",
+			wantState: envelopekmsv2.State{
+				EncryptedObject:     kmstypes.EncryptedObject{KeyID: "2", EncryptedDEKSourceType: kmstypes.EncryptedDEKSourceType_HKDF_SHA256_XNONCE_AES_GCM_SEED},
+				ExpirationTimestamp: now.Add(3 * time.Minute),
+			},
+			wantEncryptCalls: 0,
+			wantLogs:         nil,
+			wantErr:          "",
+		},
+		{
 			name:        "previous state expired but key ID matches",
 			service:     &testKMSv2EnvelopeService{err: fmt.Errorf("broken")}, // not called
-			state:       validState(t, "3", now.Add(-time.Hour)),
+			state:       validState(t, "3", now.Add(-time.Hour), false),
 			statusKeyID: "3",
 			wantState: envelopekmsv2.State{
 				EncryptedObject:     kmstypes.EncryptedObject{KeyID: "3"},
@@ -1783,7 +1998,7 @@ func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
 		{
 			name:        "previous state expired but key ID does not match",
 			service:     &testKMSv2EnvelopeService{keyID: "4"},
-			state:       validState(t, "3", now.Add(-time.Hour)),
+			state:       validState(t, "3", now.Add(-time.Hour), false),
 			statusKeyID: "4",
 			wantState: envelopekmsv2.State{
 				EncryptedObject:     kmstypes.EncryptedObject{KeyID: "4"},
@@ -1800,7 +2015,7 @@ func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
 		{
 			name:        "service down but key ID does not match",
 			service:     &testKMSv2EnvelopeService{err: fmt.Errorf("broken")},
-			state:       validState(t, "4", now.Add(7*time.Minute)),
+			state:       validState(t, "4", now.Add(7*time.Minute), false),
 			statusKeyID: "5",
 			wantState: envelopekmsv2.State{
 				EncryptedObject:     kmstypes.EncryptedObject{KeyID: "4"},
@@ -1832,7 +2047,7 @@ func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
 		{
 			name:        "invalid service response, with previous state",
 			service:     &testKMSv2EnvelopeService{keyID: "3", encryptAnnotations: map[string][]byte{"panda": nil}},
-			state:       validState(t, "2", now),
+			state:       validState(t, "2", now, false),
 			statusKeyID: "3",
 			wantState: envelopekmsv2.State{
 				EncryptedObject:     kmstypes.EncryptedObject{KeyID: "2"},
@@ -1909,6 +2124,7 @@ func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
 					&testKMSv2EnvelopeService{err: fmt.Errorf("broken")}, // not called
 					"panda",
 					h.getCurrentState,
+					"",
 				)
 
 				dataCtx := value.DefaultContext(sampleContextText)
@@ -1934,10 +2150,8 @@ func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
 	}
 }
 
-func validState(t *testing.T, keyID string, exp time.Time) envelopekmsv2.State {
+func validState(t *testing.T, keyID string, exp time.Time, useSeed bool) envelopekmsv2.State {
 	t.Helper()
-
-	useSeed := utilfeature.DefaultFeatureGate.Enabled(features.KMSv2KDF) // match the current default behavior
 
 	transformer, encObject, cacheKey, err := envelopekmsv2.GenerateTransformer(testContext(t), "", &testKMSv2EnvelopeService{keyID: keyID}, useSeed)
 	if err != nil {

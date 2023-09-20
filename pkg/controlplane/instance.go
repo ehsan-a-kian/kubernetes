@@ -43,7 +43,6 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	eventsv1 "k8s.io/api/events/v1"
-	flowcontrolv1alpha1 "k8s.io/api/flowcontrol/v1alpha1"
 	networkingapiv1 "k8s.io/api/networking/v1"
 	networkingapiv1alpha1 "k8s.io/api/networking/v1alpha1"
 	nodev1 "k8s.io/api/node/v1"
@@ -128,8 +127,6 @@ const (
 	IdentityLeaseComponentLabelKey = "apiserver.kubernetes.io/identity"
 	// KubeAPIServer defines variable used internally when referring to kube-apiserver component
 	KubeAPIServer = "kube-apiserver"
-	// DeprecatedKubeAPIServerIdentityLeaseLabelSelector selects kube-apiserver identity leases
-	DeprecatedKubeAPIServerIdentityLeaseLabelSelector = "k8s.io/component=kube-apiserver"
 	// KubeAPIServerIdentityLeaseLabelSelector selects kube-apiserver identity leases
 	KubeAPIServerIdentityLeaseLabelSelector = IdentityLeaseComponentLabelKey + "=" + KubeAPIServer
 	// repairLoopInterval defines the interval used to run the Services ClusterIP and NodePort repair loops
@@ -606,22 +603,6 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 			go controller.Run(ctx)
 			return nil
 		})
-		// Labels for apiserver idenitiy leases switched from k8s.io/component=kube-apiserver to apiserver.kubernetes.io/identity=kube-apiserver.
-		// For compatibility, garbage collect leases with both labels for at least 1 release
-		// TODO: remove in Kubernetes 1.28
-		m.GenericAPIServer.AddPostStartHookOrDie("start-deprecated-kube-apiserver-identity-lease-garbage-collector", func(hookContext genericapiserver.PostStartHookContext) error {
-			kubeClient, err := kubernetes.NewForConfig(hookContext.LoopbackClientConfig)
-			if err != nil {
-				return err
-			}
-			go apiserverleasegc.NewAPIServerLeaseGC(
-				kubeClient,
-				IdentityLeaseGCPeriod,
-				metav1.NamespaceSystem,
-				DeprecatedKubeAPIServerIdentityLeaseLabelSelector,
-			).Run(hookContext.StopCh)
-			return nil
-		})
 		// TODO: move this into generic apiserver and make the lease identity value configurable
 		m.GenericAPIServer.AddPostStartHookOrDie("start-kube-apiserver-identity-lease-garbage-collector", func(hookContext genericapiserver.PostStartHookContext) error {
 			kubeClient, err := kubernetes.NewForConfig(hookContext.LoopbackClientConfig)
@@ -774,8 +755,6 @@ var (
 	// see https://github.com/kubernetes/enhancements/tree/master/keps/sig-architecture/3136-beta-apis-off-by-default
 	// for more details.
 	legacyBetaEnabledByDefaultResources = []schema.GroupVersionResource{
-		flowcontrolv1beta2.SchemeGroupVersion.WithResource("flowschemas"),                 // remove in 1.29
-		flowcontrolv1beta2.SchemeGroupVersion.WithResource("prioritylevelconfigurations"), // remove in 1.29
 		flowcontrolv1beta3.SchemeGroupVersion.WithResource("flowschemas"),                 // deprecate in 1.29, remove in 1.32
 		flowcontrolv1beta3.SchemeGroupVersion.WithResource("prioritylevelconfigurations"), // deprecate in 1.29, remove in 1.32
 	}
@@ -798,7 +777,6 @@ var (
 		certificatesv1alpha1.SchemeGroupVersion,
 		networkingapiv1alpha1.SchemeGroupVersion,
 		storageapiv1alpha1.SchemeGroupVersion,
-		flowcontrolv1alpha1.SchemeGroupVersion,
 	}
 )
 

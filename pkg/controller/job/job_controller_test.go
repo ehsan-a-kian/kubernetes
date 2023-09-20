@@ -626,7 +626,7 @@ func TestControllerSyncJob(t *testing.T) {
 			expectedActive:         2,
 			expectedCreatedIndexes: sets.New(0, 1),
 		},
-		"indexed job with some pods deleted, podRecreationPolicy Failed": {
+		"indexed job with some pods deleted, podReplacementPolicy Failed": {
 			parallelism:             2,
 			completions:             5,
 			backoffLimit:            6,
@@ -639,7 +639,7 @@ func TestControllerSyncJob(t *testing.T) {
 			terminatingPods:         1,
 			expectedTerminating:     pointer.Int32(1),
 		},
-		"indexed job with some pods deleted, podRecreationPolicy TerminatingOrFailed": {
+		"indexed job with some pods deleted, podReplacementPolicy TerminatingOrFailed": {
 			parallelism:             2,
 			completions:             5,
 			backoffLimit:            6,
@@ -1909,7 +1909,7 @@ func TestSyncJobPastDeadline(t *testing.T) {
 			expectedDeletions:       1,
 			expectedFailed:          1,
 			expectedCondition:       batch.JobFailed,
-			expectedConditionReason: "DeadlineExceeded",
+			expectedConditionReason: batch.JobReasonDeadlineExceeded,
 		},
 		"activeDeadlineSeconds bigger than single pod execution": {
 			parallelism:             1,
@@ -1923,7 +1923,7 @@ func TestSyncJobPastDeadline(t *testing.T) {
 			expectedSucceeded:       1,
 			expectedFailed:          1,
 			expectedCondition:       batch.JobFailed,
-			expectedConditionReason: "DeadlineExceeded",
+			expectedConditionReason: batch.JobReasonDeadlineExceeded,
 		},
 		"activeDeadlineSeconds times-out before any pod starts": {
 			parallelism:             1,
@@ -1932,7 +1932,7 @@ func TestSyncJobPastDeadline(t *testing.T) {
 			startTime:               10,
 			backoffLimit:            6,
 			expectedCondition:       batch.JobFailed,
-			expectedConditionReason: "DeadlineExceeded",
+			expectedConditionReason: batch.JobReasonDeadlineExceeded,
 		},
 		"activeDeadlineSeconds with backofflimit reach": {
 			parallelism:             1,
@@ -1942,7 +1942,7 @@ func TestSyncJobPastDeadline(t *testing.T) {
 			failedPods:              1,
 			expectedFailed:          1,
 			expectedCondition:       batch.JobFailed,
-			expectedConditionReason: "BackoffLimitExceeded",
+			expectedConditionReason: batch.JobReasonBackoffLimitExceeded,
 		},
 		"activeDeadlineSeconds is not triggered when Job is suspended": {
 			suspend:                 true,
@@ -2098,7 +2098,7 @@ func TestPastDeadlineJobFinished(t *testing.T) {
 				if err != nil {
 					return false, nil
 				}
-				if getCondition(j, batch.JobFailed, v1.ConditionTrue, "DeadlineExceeded") {
+				if getCondition(j, batch.JobFailed, v1.ConditionTrue, batch.JobReasonDeadlineExceeded) {
 					if manager.clock.Since(j.Status.StartTime.Time) < time.Duration(*j.Spec.ActiveDeadlineSeconds)*time.Second {
 						return true, errors.New("Job contains DeadlineExceeded condition earlier than expected")
 					}
@@ -2397,7 +2397,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 				{
 					Type:    batch.JobFailed,
 					Status:  v1.ConditionTrue,
-					Reason:  "PodFailurePolicy",
+					Reason:  batch.JobReasonPodFailurePolicy,
 					Message: "Container main-container for pod default/mypod-0 failed with exit code 5 matching FailJob rule at index 1",
 				},
 			},
@@ -2425,7 +2425,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 						{
 							Type:    batch.JobFailureTarget,
 							Status:  v1.ConditionTrue,
-							Reason:  "PodFailurePolicy",
+							Reason:  batch.JobReasonPodFailurePolicy,
 							Message: "Container main-container for pod default/mypod-0 failed with exit code 5 matching FailJob rule at index 1",
 						},
 					},
@@ -2452,7 +2452,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 				{
 					Type:    batch.JobFailed,
 					Status:  v1.ConditionTrue,
-					Reason:  "PodFailurePolicy",
+					Reason:  batch.JobReasonPodFailurePolicy,
 					Message: "Container main-container for pod default/mypod-0 failed with exit code 5 matching FailJob rule at index 1",
 				},
 			},
@@ -2480,7 +2480,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 						{
 							Type:    batch.JobFailureTarget,
 							Status:  v1.ConditionTrue,
-							Reason:  "PodFailurePolicy",
+							Reason:  batch.JobReasonPodFailurePolicy,
 							Message: "Container main-container for pod default/already-deleted-pod failed with exit code 5 matching FailJob rule at index 1",
 						},
 					},
@@ -2507,7 +2507,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 				{
 					Type:    batch.JobFailed,
 					Status:  v1.ConditionTrue,
-					Reason:  "PodFailurePolicy",
+					Reason:  batch.JobReasonPodFailurePolicy,
 					Message: "Container main-container for pod default/already-deleted-pod failed with exit code 5 matching FailJob rule at index 1",
 				},
 			},
@@ -2596,7 +2596,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 				{
 					Type:    batch.JobFailed,
 					Status:  v1.ConditionTrue,
-					Reason:  "PodFailurePolicy",
+					Reason:  batch.JobReasonPodFailurePolicy,
 					Message: "Container main-container for pod default/mypod-1 failed with exit code 5 matching FailJob rule at index 1",
 				},
 			},
@@ -2642,7 +2642,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 				{
 					Type:    batch.JobFailed,
 					Status:  v1.ConditionTrue,
-					Reason:  "PodFailurePolicy",
+					Reason:  batch.JobReasonPodFailurePolicy,
 					Message: "Container main-container for pod default/mypod-0 failed with exit code 5 matching FailJob rule at index 1",
 				},
 			},
@@ -2695,7 +2695,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 				{
 					Type:    batch.JobFailed,
 					Status:  v1.ConditionTrue,
-					Reason:  "PodFailurePolicy",
+					Reason:  batch.JobReasonPodFailurePolicy,
 					Message: "Container main-container for pod default/mypod-0 failed with exit code 42 matching FailJob rule at index 0",
 				},
 			},
@@ -2797,7 +2797,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 				{
 					Type:    batch.JobFailed,
 					Status:  v1.ConditionTrue,
-					Reason:  "PodFailurePolicy",
+					Reason:  batch.JobReasonPodFailurePolicy,
 					Message: "Container init-container for pod default/mypod-0 failed with exit code 5 matching FailJob rule at index 1",
 				},
 			},
@@ -2924,7 +2924,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 				{
 					Type:    batch.JobFailed,
 					Status:  v1.ConditionTrue,
-					Reason:  "BackoffLimitExceeded",
+					Reason:  batch.JobReasonBackoffLimitExceeded,
 					Message: "Job has reached the specified backoff limit",
 				},
 			},
@@ -3185,7 +3185,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 				{
 					Type:    batch.JobFailed,
 					Status:  v1.ConditionTrue,
-					Reason:  "PodFailurePolicy",
+					Reason:  batch.JobReasonPodFailurePolicy,
 					Message: "Pod default/mypod-0 has condition DisruptionTarget matching FailJob rule at index 0",
 				},
 			},
@@ -3571,13 +3571,13 @@ func TestSyncJobWithJobBackoffLimitPerIndex(t *testing.T) {
 					{
 						Type:    batch.JobFailureTarget,
 						Status:  v1.ConditionTrue,
-						Reason:  "PodFailurePolicy",
+						Reason:  batch.JobReasonPodFailurePolicy,
 						Message: "Container x for pod default/mypod-0 failed with exit code 3 matching FailJob rule at index 0",
 					},
 					{
 						Type:    batch.JobFailed,
 						Status:  v1.ConditionTrue,
-						Reason:  "PodFailurePolicy",
+						Reason:  batch.JobReasonPodFailurePolicy,
 						Message: "Container x for pod default/mypod-0 failed with exit code 3 matching FailJob rule at index 0",
 					},
 				},
@@ -3660,7 +3660,7 @@ func TestSyncJobWithJobBackoffLimitPerIndex(t *testing.T) {
 					{
 						Type:    batch.JobFailed,
 						Status:  v1.ConditionTrue,
-						Reason:  "BackoffLimitExceeded",
+						Reason:  batch.JobReasonBackoffLimitExceeded,
 						Message: "Job has reached the specified backoff limit",
 					},
 				},
@@ -3695,7 +3695,7 @@ func TestSyncJobWithJobBackoffLimitPerIndex(t *testing.T) {
 					{
 						Type:    batch.JobFailed,
 						Status:  v1.ConditionTrue,
-						Reason:  "FailedIndexes",
+						Reason:  jobReasonFailedIndexes,
 						Message: "Job has failed indexes",
 					},
 				},
@@ -3733,7 +3733,7 @@ func TestSyncJobWithJobBackoffLimitPerIndex(t *testing.T) {
 					{
 						Type:    batch.JobFailed,
 						Status:  v1.ConditionTrue,
-						Reason:  "MaxFailedIndexesExceeded",
+						Reason:  jobReasonMaxFailedIndexesExceeded,
 						Message: "Job has exceeded the specified maximal number of failed indexes",
 					},
 				},
@@ -5170,6 +5170,64 @@ func TestFinalizersRemovedExpectations(t *testing.T) {
 	}); err != nil {
 		t.Errorf("Timeout waiting for expectations (-want, +got):\n%s", diff)
 	}
+}
+
+func TestFinalizerCleanup(t *testing.T) {
+	_, ctx := ktesting.NewTestContext(t)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	clientset := fake.NewSimpleClientset()
+	sharedInformers := informers.NewSharedInformerFactory(clientset, controller.NoResyncPeriodFunc())
+	manager := NewController(ctx, sharedInformers.Core().V1().Pods(), sharedInformers.Batch().V1().Jobs(), clientset)
+	manager.podStoreSynced = alwaysReady
+	manager.jobStoreSynced = alwaysReady
+
+	// Initialize the controller with 0 workers to make sure the
+	// pod finalizers are not removed by the "syncJob" function.
+	go manager.Run(ctx, 0)
+
+	// Start the Pod and Job informers.
+	sharedInformers.Start(ctx.Done())
+	sharedInformers.WaitForCacheSync(ctx.Done())
+
+	// Create a simple Job
+	job := newJob(1, 1, 1, batch.NonIndexedCompletion)
+	job, err := clientset.BatchV1().Jobs(job.GetNamespace()).Create(ctx, job, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Creating job: %v", err)
+	}
+
+	// Create a Pod with the job tracking finalizer
+	pod := newPod("test-pod", job)
+	pod.Finalizers = append(pod.Finalizers, batch.JobTrackingFinalizer)
+	pod, err = clientset.CoreV1().Pods(pod.GetNamespace()).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Creating pod: %v", err)
+	}
+
+	// Mark Job as complete.
+	job.Status.Conditions = append(job.Status.Conditions, batch.JobCondition{
+		Type:   batch.JobComplete,
+		Status: v1.ConditionTrue,
+	})
+	_, err = clientset.BatchV1().Jobs(job.GetNamespace()).UpdateStatus(ctx, job, metav1.UpdateOptions{})
+	if err != nil {
+		t.Fatalf("Updating job status: %v", err)
+	}
+
+	// Verify the pod finalizer is removed for a finished Job,
+	// even if the jobs pods are not tracked by the main reconciliation loop.
+	if err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, wait.ForeverTestTimeout, true, func(ctx context.Context) (bool, error) {
+		p, err := clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		return !hasJobTrackingFinalizer(p), nil
+	}); err != nil {
+		t.Errorf("Waiting for Pod to get the finalizer removed: %v", err)
+	}
+
 }
 
 func checkJobCompletionLabel(t *testing.T, p *v1.PodTemplateSpec) {

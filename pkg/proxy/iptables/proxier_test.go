@@ -38,8 +38,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/component-base/metrics/testutil"
 	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/proxy"
 	"k8s.io/kubernetes/pkg/proxy/conntrack"
 	"k8s.io/kubernetes/pkg/proxy/metrics"
@@ -2560,6 +2563,49 @@ func TestHealthCheckNodePort(t *testing.T) {
 			output:   "",
 		},
 	})
+}
+
+func TestDropInvalidRule(t *testing.T) {
+	for _, testcase := range []bool{false, true} {
+		t.Run(fmt.Sprintf("tcpLiberal %t", testcase), func(t *testing.T) {
+			ipt := iptablestest.NewFake()
+			fp := NewFakeProxier(ipt)
+			fp.conntrackTCPLiberal = testcase
+			fp.syncProxyRules()
+
+			expected := dedent.Dedent(`
+		*filter
+		:KUBE-NODEPORTS - [0:0]
+		:KUBE-SERVICES - [0:0]
+		:KUBE-EXTERNAL-SERVICES - [0:0]
+		:KUBE-FIREWALL - [0:0]
+		:KUBE-FORWARD - [0:0]
+		:KUBE-PROXY-FIREWALL - [0:0]
+		-A KUBE-FIREWALL -m comment --comment "block incoming localnet connections" -d 127.0.0.0/8 ! -s 127.0.0.0/8 -m conntrack ! --ctstate RELATED,ESTABLISHED,DNAT -j DROP`)
+			if !testcase {
+				expected += "\n-A KUBE-FORWARD -m conntrack --ctstate INVALID -j DROP"
+			}
+
+			expected += dedent.Dedent(`
+		-A KUBE-FORWARD -m comment --comment "kubernetes forwarding rules" -m mark --mark 0x4000/0x4000 -j ACCEPT
+		-A KUBE-FORWARD -m comment --comment "kubernetes forwarding conntrack rule" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+		COMMIT
+		*nat
+		:KUBE-NODEPORTS - [0:0]
+		:KUBE-SERVICES - [0:0]
+		:KUBE-MARK-MASQ - [0:0]
+		:KUBE-POSTROUTING - [0:0]
+		-A KUBE-SERVICES -m comment --comment "kubernetes service nodeports; NOTE: this must be the last rule in this chain" -m addrtype --dst-type LOCAL -j KUBE-NODEPORTS
+		-A KUBE-MARK-MASQ -j MARK --or-mark 0x4000
+		-A KUBE-POSTROUTING -m mark ! --mark 0x4000/0x4000 -j RETURN
+		-A KUBE-POSTROUTING -j MARK --xor-mark 0x4000
+		-A KUBE-POSTROUTING -m comment --comment "kubernetes service traffic requiring SNAT" -j MASQUERADE
+		COMMIT
+		`)
+
+			assertIPTablesRulesEqual(t, getLine(), true, expected, fp.iptablesData.String())
+		})
+	}
 }
 
 func TestMasqueradeRule(t *testing.T) {
@@ -5268,7 +5314,7 @@ func TestProxierDeleteNodePortStaleUDP(t *testing.T) {
 			eps.Endpoints = []discovery.Endpoint{{
 				Addresses: []string{epIP},
 				Conditions: discovery.EndpointConditions{
-					Ready: pointer.Bool(false),
+					Serving: pointer.Bool(false),
 				},
 			}}
 			eps.Ports = []discovery.EndpointPort{{
@@ -5291,7 +5337,7 @@ func TestProxierDeleteNodePortStaleUDP(t *testing.T) {
 			eps.Endpoints = []discovery.Endpoint{{
 				Addresses: []string{epIP},
 				Conditions: discovery.EndpointConditions{
-					Ready: pointer.Bool(true),
+					Serving: pointer.Bool(true),
 				},
 			}}
 			eps.Ports = []discovery.EndpointPort{{
@@ -8272,6 +8318,131 @@ func TestNoEndpointsMetric(t *testing.T) {
 
 			if tc.expectedSyncProxyRulesNoLocalEndpointsTotalExternal != int(syncProxyRulesNoLocalEndpointsTotalExternal) {
 				t.Errorf("sync_proxy_rules_no_endpoints_total metric mismatch(internal): got=%d, expected %d", int(syncProxyRulesNoLocalEndpointsTotalExternal), tc.expectedSyncProxyRulesNoLocalEndpointsTotalExternal)
+			}
+		})
+	}
+}
+
+func TestLoadBalancerIngressRouteTypeProxy(t *testing.T) {
+	ipModeProxy := v1.LoadBalancerIPModeProxy
+	ipModeVIP := v1.LoadBalancerIPModeVIP
+
+	testCases := []struct {
+		name          string
+		ipModeEnabled bool
+		svcIP         string
+		svcLBIP       string
+		ipMode        *v1.LoadBalancerIPMode
+		expectedRule  bool
+	}{
+		/* LoadBalancerIPMode disabled */
+		{
+			name:          "LoadBalancerIPMode disabled, ipMode Proxy",
+			ipModeEnabled: false,
+			svcIP:         "10.20.30.41",
+			svcLBIP:       "1.2.3.4",
+			ipMode:        &ipModeProxy,
+			expectedRule:  true,
+		},
+		{
+			name:          "LoadBalancerIPMode disabled, ipMode VIP",
+			ipModeEnabled: false,
+			svcIP:         "10.20.30.42",
+			svcLBIP:       "1.2.3.5",
+			ipMode:        &ipModeVIP,
+			expectedRule:  true,
+		},
+		{
+			name:          "LoadBalancerIPMode disabled, ipMode nil",
+			ipModeEnabled: false,
+			svcIP:         "10.20.30.43",
+			svcLBIP:       "1.2.3.6",
+			ipMode:        nil,
+			expectedRule:  true,
+		},
+		/* LoadBalancerIPMode enabled */
+		{
+			name:          "LoadBalancerIPMode enabled, ipMode Proxy",
+			ipModeEnabled: true,
+			svcIP:         "10.20.30.41",
+			svcLBIP:       "1.2.3.4",
+			ipMode:        &ipModeProxy,
+			expectedRule:  false,
+		},
+		{
+			name:          "LoadBalancerIPMode enabled, ipMode VIP",
+			ipModeEnabled: true,
+			svcIP:         "10.20.30.42",
+			svcLBIP:       "1.2.3.5",
+			ipMode:        &ipModeVIP,
+			expectedRule:  true,
+		},
+		{
+			name:          "LoadBalancerIPMode enabled, ipMode nil",
+			ipModeEnabled: true,
+			svcIP:         "10.20.30.43",
+			svcLBIP:       "1.2.3.6",
+			ipMode:        nil,
+			expectedRule:  true,
+		},
+	}
+
+	svcPort := 80
+	svcNodePort := 3001
+	svcPortName := proxy.ServicePortName{
+		NamespacedName: makeNSN("ns1", "svc1"),
+		Port:           "p80",
+		Protocol:       v1.ProtocolTCP,
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.LoadBalancerIPMode, testCase.ipModeEnabled)()
+			ipt := iptablestest.NewFake()
+			fp := NewFakeProxier(ipt)
+			makeServiceMap(fp,
+				makeTestService(svcPortName.Namespace, svcPortName.Name, func(svc *v1.Service) {
+					svc.Spec.Type = "LoadBalancer"
+					svc.Spec.ClusterIP = testCase.svcIP
+					svc.Spec.Ports = []v1.ServicePort{{
+						Name:     svcPortName.Port,
+						Port:     int32(svcPort),
+						Protocol: v1.ProtocolTCP,
+						NodePort: int32(svcNodePort),
+					}}
+					svc.Status.LoadBalancer.Ingress = []v1.LoadBalancerIngress{{
+						IP:     testCase.svcLBIP,
+						IPMode: testCase.ipMode,
+					}}
+				}),
+			)
+
+			tcpProtocol := v1.ProtocolTCP
+			populateEndpointSlices(fp,
+				makeTestEndpointSlice("ns1", "svc1", 1, func(eps *discovery.EndpointSlice) {
+					eps.AddressType = discovery.AddressTypeIPv4
+					eps.Endpoints = []discovery.Endpoint{{
+						Addresses: []string{"10.180.0.1"},
+					}}
+					eps.Ports = []discovery.EndpointPort{{
+						Name:     pointer.String("p80"),
+						Port:     pointer.Int32(80),
+						Protocol: &tcpProtocol,
+					}}
+				}),
+			)
+
+			fp.syncProxyRules()
+
+			c, _ := ipt.Dump.GetChain(utiliptables.TableNAT, kubeServicesChain)
+			ruleExists := false
+			for _, r := range c.Rules {
+				if r.DestinationAddress != nil && r.DestinationAddress.Value == testCase.svcLBIP {
+					ruleExists = true
+				}
+			}
+			if ruleExists != testCase.expectedRule {
+				t.Errorf("unexpected rule for %s", testCase.svcLBIP)
 			}
 		})
 	}
