@@ -195,7 +195,7 @@ func BuildOpenAPIV3(crd *apiextensionsv1.CustomResourceDefinition, version strin
 		return nil, err
 	}
 
-	return builder3.BuildOpenAPISpecFromRoutes(restfuladapter.AdaptWebServices([]*restful.WebService{b.ws}), b.getOpenAPIConfig(false))
+	return builder3.BuildOpenAPISpecFromRoutes(restfuladapter.AdaptWebServices([]*restful.WebService{b.ws}), b.getOpenAPIV3Config())
 }
 
 // BuildOpenAPIV2 builds OpenAPI v2 for the given crd in the given version
@@ -205,7 +205,7 @@ func BuildOpenAPIV2(crd *apiextensionsv1.CustomResourceDefinition, version strin
 		return nil, err
 	}
 
-	return openapibuilder.BuildOpenAPISpecFromRoutes(restfuladapter.AdaptWebServices([]*restful.WebService{b.ws}), b.getOpenAPIConfig(true))
+	return openapibuilder.BuildOpenAPISpecFromRoutes(restfuladapter.AdaptWebServices([]*restful.WebService{b.ws}), b.getOpenAPIConfig())
 }
 
 // Implements CanonicalTypeNamer
@@ -311,7 +311,7 @@ func (b *builder) buildRoute(root, path, httpMethod, actionVerb, operationVerb s
 		Path(root+path).
 		To(func(req *restful.Request, res *restful.Response) {}).
 		Doc(b.descriptionFor(path, operationVerb)).
-		Param(b.ws.QueryParameter("pretty", "If 'true', then the output is pretty printed.")).
+		Param(b.ws.QueryParameter("pretty", "If 'true', then the output is pretty printed. Defaults to 'false' unless the user-agent indicates a browser or command-line HTTP tool (curl and wget).")).
 		Operation(operationVerb+namespaced+b.kind+strings.Title(subresource(path))).
 		Metadata(endpoints.ROUTE_META_GVK, metav1.GroupVersionKind{
 			Group:   b.group,
@@ -508,7 +508,7 @@ func (b *builder) buildListSchema(v2 bool) *spec.Schema {
 }
 
 // getOpenAPIConfig builds config which wires up generated definitions for kube-openapi to consume
-func (b *builder) getOpenAPIConfig(v2 bool) *common.Config {
+func (b *builder) getOpenAPIConfig() *common.Config {
 	return &common.Config{
 		ProtocolList: []string{"https"},
 		Info: &spec.Info{
@@ -520,6 +520,40 @@ func (b *builder) getOpenAPIConfig(v2 bool) *common.Config {
 		CommonResponses: map[int]spec.Response{
 			401: {
 				ResponseProps: spec.ResponseProps{
+					Description: "Unauthorized",
+				},
+			},
+		},
+		GetOperationIDAndTags: openapi.GetOperationIDAndTags,
+		GetDefinitionName: func(name string) (string, spec.Extensions) {
+			buildDefinitions.Do(generateBuildDefinitionsFunc)
+			return namer.GetDefinitionName(name)
+		},
+		GetDefinitions: func(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
+			def := utilopenapi.GetOpenAPIDefinitionsWithoutDisabledFeatures(generatedopenapi.GetOpenAPIDefinitions)(ref)
+			def[fmt.Sprintf("%s/%s.%s", b.group, b.version, b.kind)] = common.OpenAPIDefinition{
+				Schema:       *b.schema,
+				Dependencies: []string{objectMetaType},
+			}
+			def[fmt.Sprintf("%s/%s.%s", b.group, b.version, b.listKind)] = common.OpenAPIDefinition{
+				Schema: *b.listSchema,
+			}
+			return def
+		},
+	}
+}
+
+func (b *builder) getOpenAPIV3Config() *common.OpenAPIV3Config {
+	return &common.OpenAPIV3Config{
+		Info: &spec.Info{
+			InfoProps: spec.InfoProps{
+				Title:   "Kubernetes CRD Swagger",
+				Version: "v0.1.0",
+			},
+		},
+		CommonResponses: map[int]*spec3.Response{
+			401: {
+				ResponseProps: spec3.ResponseProps{
 					Description: "Unauthorized",
 				},
 			},

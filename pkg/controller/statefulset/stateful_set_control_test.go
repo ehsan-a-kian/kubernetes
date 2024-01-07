@@ -170,6 +170,7 @@ func TestStatefulSetControl(t *testing.T) {
 		{ScalesDown, simpleSetFn},
 		{ReplacesPods, largeSetFn},
 		{RecreatesFailedPod, simpleSetFn},
+		{RecreatesSucceededPod, simpleSetFn},
 		{CreatePodFailure, simpleSetFn},
 		{UpdatePodFailure, simpleSetFn},
 		{UpdateSetStatusFailure, simpleSetFn},
@@ -397,7 +398,7 @@ func ReplacesPods(t *testing.T, set *apps.StatefulSet, invariants invariantFunc)
 	}
 }
 
-func RecreatesFailedPod(t *testing.T, set *apps.StatefulSet, invariants invariantFunc) {
+func recreatesPod(t *testing.T, set *apps.StatefulSet, invariants invariantFunc, phase v1.PodPhase) {
 	client := fake.NewSimpleClientset()
 	om, _, ssc := setupController(client)
 	selector, err := metav1.LabelSelectorAsSelector(set.Spec.Selector)
@@ -418,7 +419,7 @@ func RecreatesFailedPod(t *testing.T, set *apps.StatefulSet, invariants invarian
 	if err != nil {
 		t.Error(err)
 	}
-	pods[0].Status.Phase = v1.PodFailed
+	pods[0].Status.Phase = phase
 	om.podsIndexer.Update(pods[0])
 	if _, err := ssc.UpdateStatefulSet(context.TODO(), set, pods); err != nil {
 		t.Errorf("Error updating StatefulSet %s", err)
@@ -433,6 +434,15 @@ func RecreatesFailedPod(t *testing.T, set *apps.StatefulSet, invariants invarian
 	if isCreated(pods[0]) {
 		t.Error("StatefulSet did not recreate failed Pod")
 	}
+
+}
+
+func RecreatesFailedPod(t *testing.T, set *apps.StatefulSet, invariants invariantFunc) {
+	recreatesPod(t, set, invariants, v1.PodFailed)
+}
+
+func RecreatesSucceededPod(t *testing.T, set *apps.StatefulSet, invariants invariantFunc) {
+	recreatesPod(t, set, invariants, v1.PodSucceeded)
 }
 
 func CreatePodFailure(t *testing.T, set *apps.StatefulSet, invariants invariantFunc) {
@@ -2429,6 +2439,12 @@ func (rt *requestTracker) reset() {
 	rt.delay = 0
 }
 
+func (rt *requestTracker) getErr() error {
+	rt.Lock()
+	defer rt.Unlock()
+	return rt.err
+}
+
 func newRequestTracker(requests int, err error, after int) requestTracker {
 	return requestTracker{
 		requests: requests,
@@ -2474,7 +2490,7 @@ func (om *fakeObjectManager) CreatePod(ctx context.Context, pod *v1.Pod) error {
 	defer om.createPodTracker.inc()
 	if om.createPodTracker.errorReady() {
 		defer om.createPodTracker.reset()
-		return om.createPodTracker.err
+		return om.createPodTracker.getErr()
 	}
 	pod.SetUID(types.UID(pod.Name + "-uid"))
 	return om.podsIndexer.Update(pod)
@@ -2492,7 +2508,7 @@ func (om *fakeObjectManager) DeletePod(pod *v1.Pod) error {
 	defer om.deletePodTracker.inc()
 	if om.deletePodTracker.errorReady() {
 		defer om.deletePodTracker.reset()
-		return om.deletePodTracker.err
+		return om.deletePodTracker.getErr()
 	}
 	if key, err := controller.KeyFunc(pod); err != nil {
 		return err
@@ -2927,6 +2943,7 @@ func TestParallelScale(t *testing.T) {
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
 			set := burst(newStatefulSet(0))
+			set.Spec.VolumeClaimTemplates[0].ObjectMeta.Labels = map[string]string{"test": "test"}
 			parallelScale(t, set, tc.replicas, tc.desiredReplicas, assertBurstInvariants)
 		})
 	}

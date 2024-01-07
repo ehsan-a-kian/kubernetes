@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+set -x
+
 KUBE_ROOT=$(dirname "${BASH_SOURCE[0]}")/..
 
 # This script builds and runs a local kubernetes cluster. You may need to run
@@ -52,7 +54,7 @@ LIMITED_SWAP=${LIMITED_SWAP:-""}
 
 # required for cni installation
 CNI_CONFIG_DIR=${CNI_CONFIG_DIR:-/etc/cni/net.d}
-CNI_PLUGINS_VERSION=${CNI_PLUGINS_VERSION:-"v1.3.0"}
+CNI_PLUGINS_VERSION=${CNI_PLUGINS_VERSION:-"v1.4.0"}
 # The arch of the CNI binary, if not set, will be fetched based on the value of `uname -m`
 CNI_TARGETARCH=${CNI_TARGETARCH:-""}
 CNI_PLUGINS_URL="https://github.com/containernetworking/plugins/releases/download"
@@ -99,8 +101,6 @@ ENABLE_TRACING=${ENABLE_TRACING:-false}
 # enable Kubernetes-CSI snapshotter
 ENABLE_CSI_SNAPSHOTTER=${ENABLE_CSI_SNAPSHOTTER:-false}
 
-# RBAC Mode options
-AUTHORIZATION_MODE=${AUTHORIZATION_MODE:-"Node,RBAC"}
 KUBECONFIG_TOKEN=${KUBECONFIG_TOKEN:-""}
 AUTH_ARGS=${AUTH_ARGS:-""}
 
@@ -494,10 +494,19 @@ function start_apiserver {
     # Append security_admission plugin
     ENABLE_ADMISSION_PLUGINS="${ENABLE_ADMISSION_PLUGINS}${security_admission}"
 
-    authorizer_arg=""
-    if [[ -n "${AUTHORIZATION_MODE}" ]]; then
-      authorizer_arg="--authorization-mode=${AUTHORIZATION_MODE}"
+    authorizer_args=()
+    if [[ -n "${AUTHORIZATION_CONFIG:-}" ]]; then
+      authorizer_args+=("--authorization-config=${AUTHORIZATION_CONFIG}")
+    else
+      if [[ -n "${AUTHORIZATION_MODE:-Node,RBAC}" ]]; then
+        authorizer_args+=("--authorization-mode=${AUTHORIZATION_MODE:-Node,RBAC}")
+      fi
+      authorizer_args+=(
+        "--authorization-webhook-config-file=${AUTHORIZATION_WEBHOOK_CONFIG_FILE}"
+        "--authentication-token-webhook-config-file=${AUTHENTICATION_WEBHOOK_CONFIG_FILE}"
+      )
     fi
+
     priv_arg=""
     if [[ -n "${ALLOW_PRIVILEGED}" ]]; then
       priv_arg="--allow-privileged=${ALLOW_PRIVILEGED}"
@@ -570,7 +579,7 @@ EOF
 
     APISERVER_LOG=${LOG_DIR}/kube-apiserver.log
     # shellcheck disable=SC2086
-    ${CONTROLPLANE_SUDO} "${GO_OUT}/kube-apiserver" "${authorizer_arg}" "${priv_arg}" ${runtime_config} \
+    ${CONTROLPLANE_SUDO} "${GO_OUT}/kube-apiserver" "${authorizer_args[@]}" "${priv_arg}" ${runtime_config} \
       ${cloud_config_arg} \
       "${advertise_address}" \
       "${node_port_range}" \
@@ -578,8 +587,6 @@ EOF
       --vmodule="${LOG_SPEC}" \
       --audit-policy-file="${AUDIT_POLICY_FILE}" \
       --audit-log-path="${LOG_DIR}/kube-apiserver-audit.log" \
-      --authorization-webhook-config-file="${AUTHORIZATION_WEBHOOK_CONFIG_FILE}" \
-      --authentication-token-webhook-config-file="${AUTHENTICATION_WEBHOOK_CONFIG_FILE}" \
       --cert-dir="${CERT_DIR}" \
       --egress-selector-config-file="${EGRESS_SELECTOR_CONFIG_FILE:-}" \
       --client-ca-file="${CERT_DIR}/client-ca.crt" \
@@ -613,14 +620,15 @@ EOF
       --cors-allowed-origins="${API_CORS_ALLOWED_ORIGINS}" >"${APISERVER_LOG}" 2>&1 &
     APISERVER_PID=$!
 
+    # Create kubeconfigs for all components, using client certs
+    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" admin
+    ${CONTROLPLANE_SUDO} chown "${USER}" "${CERT_DIR}/client-admin.key" # make readable for kubectl
+
     # Wait for kube-apiserver to come up before launching the rest of the components.
     echo "Waiting for apiserver to come up"
     kube::util::wait_for_url "https://${API_HOST_IP}:${API_SECURE_PORT}/healthz" "apiserver: " 1 "${WAIT_FOR_URL_API_SERVER}" "${MAX_TIME_FOR_URL_API_SERVER}" \
         || { echo "check apiserver logs: ${APISERVER_LOG}" ; exit 1 ; }
 
-    # Create kubeconfigs for all components, using client certs
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" admin
-    ${CONTROLPLANE_SUDO} chown "${USER}" "${CERT_DIR}/client-admin.key" # make readable for kubectl
     kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" controller
     kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" scheduler
 
@@ -1172,25 +1180,26 @@ function install_cni {
     host_arch=$(detect_arch)
   fi
 
-  cni_plugin_sha=CNI_PLUGINS_${host_arch^^}_SHA256SUM
-  cni_plugin_tarball="${CNI_PLUGINS_VERSION}/cni-plugins-linux-${host_arch}-${CNI_PLUGINS_VERSION}.tgz"
-  cni_plugins_url="${CNI_PLUGINS_URL}/${cni_plugin_tarball}"
+  cni_plugin_tarball="cni-plugins-linux-${host_arch}-${CNI_PLUGINS_VERSION}.tgz"
+  cni_plugins_url="${CNI_PLUGINS_URL}/${CNI_PLUGINS_VERSION}/${cni_plugin_tarball}"
+  cni_plugin_sha_url="${cni_plugins_url}.sha256"
 
-  echo "Installing CNI plugin binaries ..." \
-    && curl -sSL --retry 5 --output "${TMP_DIR}"/cni."${host_arch}".tgz "${cni_plugins_url}" \
-    && echo "${!cni_plugin_sha} ${TMP_DIR}/cni.${host_arch}.tgz" | tee "${TMP_DIR}"/cni.sha256 \
-    && sha256sum --ignore-missing -c "${TMP_DIR}"/cni.sha256 \
-    && rm -f "${TMP_DIR}"/cni.sha256 \
-    && sudo mkdir -p /opt/cni/bin \
-    && sudo tar -C /opt/cni/bin -xzvf "${TMP_DIR}"/cni."${host_arch}".tgz \
-    && rm -rf "${TMP_DIR}"/cni."${host_arch}".tgz \
-    && sudo find /opt/cni/bin -type f -not \( \
-         -iname host-local \
-         -o -iname bridge \
-         -o -iname portmap \
-         -o -iname loopback \
-      \) \
-      -delete
+  echo "Installing CNI plugin binaries ..." &&
+    cd "${TMP_DIR}" &&
+    curl -sSL --retry 5 -o "${cni_plugin_tarball}" "${cni_plugins_url}" &&
+    curl -sSL --retry 5 -o "${cni_plugin_tarball}.sha256" "${cni_plugin_sha_url}" &&
+    sha256sum -c "${cni_plugin_tarball}.sha256" &&
+    rm -f "${cni_plugin_tarball}.sha256" &&
+    sudo mkdir -p /opt/cni/bin &&
+    sudo tar -C /opt/cni/bin -xzvf "${cni_plugin_tarball}" &&
+    rm -rf "${cni_plugin_tarball}" &&
+    sudo find /opt/cni/bin -type f -not \( \
+        -iname host-local \
+        -o -iname bridge \
+        -o -iname portmap \
+        -o -iname loopback \
+        \) \
+        -delete
 
   # containerd 1.4.12 installed by docker in kubekins supports CNI version 0.4.0
   echo "Configuring cni"
@@ -1276,6 +1285,9 @@ if [[ "${KUBETEST_IN_DOCKER:-}" == "true" ]]; then
   # let's log it where we can grab it later
   echo "DOCKER_LOGFILE=${LOG_DIR}/docker.log" >> /etc/default/docker
 
+  echo "stopping docker"
+  service docker stop
+
   # bump up things
   refresh_docker_containerd_runc
 
@@ -1284,8 +1296,8 @@ if [[ "${KUBETEST_IN_DOCKER:-}" == "true" ]]; then
   containerd --version
   runc --version
 
-  echo "restarting docker"
-  service docker restart
+  echo "starting docker"
+  service docker start
 fi
 
 # validate that etcd is: not running, in path, and has minimum required version.

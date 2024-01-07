@@ -42,7 +42,10 @@ const (
 
 // InitFeatureGates are the default feature gates for the init command
 var InitFeatureGates = FeatureList{
-	PublicKeysECDSA:      {FeatureSpec: featuregate.FeatureSpec{Default: false, PreRelease: featuregate.Alpha}},
+	PublicKeysECDSA: {
+		FeatureSpec:        featuregate.FeatureSpec{Default: false, PreRelease: featuregate.Deprecated},
+		DeprecationMessage: "The PublicKeysECDSA feature gate is deprecated and will be removed after the feature 'ClusterConfiguration.EncryptionAlgorithm' is added.",
+	},
 	RootlessControlPlane: {FeatureSpec: featuregate.FeatureSpec{Default: false, PreRelease: featuregate.Alpha}},
 	EtcdLearnerMode:      {FeatureSpec: featuregate.FeatureSpec{Default: true, PreRelease: featuregate.Beta}},
 	UpgradeAddonsBeforeControlPlane: {
@@ -143,7 +146,7 @@ func NewFeatureGate(f *FeatureList, value string) (map[string]bool, error) {
 		}
 
 		if featureSpec.PreRelease == featuregate.Deprecated {
-			klog.Warningf("Setting deprecated feature gate %s=%t. It will be removed in a future release.", k, v)
+			klog.Warningf("Setting deprecated feature gate %s=%s. It will be removed in a future release.", k, v)
 		}
 
 		boolValue, err := strconv.ParseBool(v)

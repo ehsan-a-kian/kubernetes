@@ -30,6 +30,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/internal/cache"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
+	tf "k8s.io/kubernetes/pkg/scheduler/testing/framework"
 )
 
 func TestLeastAllocatedScoringStrategy(t *testing.T) {
@@ -395,6 +396,7 @@ func TestLeastAllocatedScoringStrategy(t *testing.T) {
 			fh, _ := runtime.NewFramework(ctx, nil, nil, runtime.WithSnapshotSharedLister(snapshot))
 
 			p, err := NewFit(
+				ctx,
 				&config.NodeResourcesFitArgs{
 					ScoringStrategy: &config.ScoringStrategy{
 						Type:      config.LeastAllocated,
@@ -409,7 +411,7 @@ func TestLeastAllocatedScoringStrategy(t *testing.T) {
 				return
 			}
 
-			status := p.(framework.PreScorePlugin).PreScore(ctx, state, test.requestedPod, test.nodes)
+			status := p.(framework.PreScorePlugin).PreScore(ctx, state, test.requestedPod, tf.BuildNodeInfos(test.nodes))
 			if !status.IsSuccess() {
 				t.Errorf("PreScore is expected to return success, but didn't. Got status: %v", status)
 			}

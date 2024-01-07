@@ -21,17 +21,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	policy "k8s.io/api/policy/v1"
+	resourcev1alpha2 "k8s.io/api/resource/v1alpha2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/admission"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	cacheddiscovery "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
@@ -45,6 +49,7 @@ import (
 	"k8s.io/client-go/scale"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/events"
+	cliflag "k8s.io/component-base/cli/flag"
 	pvutil "k8s.io/component-helpers/storage/volume"
 	"k8s.io/controller-manager/pkg/informerfactory"
 	"k8s.io/klog/v2"
@@ -56,18 +61,20 @@ import (
 	"k8s.io/kubernetes/pkg/controller/namespace"
 	"k8s.io/kubernetes/pkg/controller/resourceclaim"
 	"k8s.io/kubernetes/pkg/controlplane"
+	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/scheduler"
 	kubeschedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	configtesting "k8s.io/kubernetes/pkg/scheduler/apis/config/testing"
 	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultpreemption"
+	frameworkruntime "k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/profile"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
 	taintutils "k8s.io/kubernetes/pkg/util/taints"
 	"k8s.io/kubernetes/test/integration/framework"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 	"k8s.io/kubernetes/test/utils/ktesting"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 // ShutdownFunc represents the function handle to be called, typically in a defer handler, to shutdown a running module
@@ -76,7 +83,7 @@ type ShutdownFunc func()
 // StartScheduler configures and starts a scheduler given a handle to the clientSet interface
 // and event broadcaster. It returns the running scheduler and podInformer. Background goroutines
 // will keep running until the context is canceled.
-func StartScheduler(ctx context.Context, clientSet clientset.Interface, kubeConfig *restclient.Config, cfg *kubeschedulerconfig.KubeSchedulerConfiguration) (*scheduler.Scheduler, informers.SharedInformerFactory) {
+func StartScheduler(ctx context.Context, clientSet clientset.Interface, kubeConfig *restclient.Config, cfg *kubeschedulerconfig.KubeSchedulerConfiguration, outOfTreePluginRegistry frameworkruntime.Registry) (*scheduler.Scheduler, informers.SharedInformerFactory) {
 	informerFactory := scheduler.NewInformerFactory(clientSet, 0)
 	evtBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{
 		Interface: clientSet.EventsV1()})
@@ -101,7 +108,9 @@ func StartScheduler(ctx context.Context, clientSet clientset.Interface, kubeConf
 		scheduler.WithPodMaxBackoffSeconds(cfg.PodMaxBackoffSeconds),
 		scheduler.WithPodInitialBackoffSeconds(cfg.PodInitialBackoffSeconds),
 		scheduler.WithExtenders(cfg.Extenders...),
-		scheduler.WithParallelism(cfg.Parallelism))
+		scheduler.WithParallelism(cfg.Parallelism),
+		scheduler.WithFrameworkOutOfTreeRegistry(outOfTreePluginRegistry),
+	)
 	if err != nil {
 		logger.Error(err, "Error creating scheduler")
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
@@ -239,8 +248,15 @@ func CreateNamespaceController(ctx context.Context, tb testing.TB, restConfig re
 	}
 }
 
-// TestContext store necessary context info
+// TestContext store necessary context info.
+// It also contains some optional parameters for InitTestScheduler.
 type TestContext struct {
+	// DisableEventSink, if set to true before calling InitTestScheduler,
+	// will skip the eventBroadcaster.StartRecordingToSink and thus
+	// some extra goroutines which are tricky to get rid of after
+	// a test.
+	DisableEventSink bool
+
 	NS                 *v1.Namespace
 	ClientSet          clientset.Interface
 	KubeConfig         *restclient.Config
@@ -257,7 +273,28 @@ type TestContext struct {
 	// SchedulerCloseFn will tear down the resources in creating scheduler,
 	// including the scheduler itself.
 	SchedulerCloseFn framework.TearDownFunc
+
+	// RoundTrip, if set, will be called for every HTTP request going to the apiserver.
+	// It can be used for error injection.
+	RoundTrip atomic.Pointer[RoundTripWrapper]
 }
+
+type RoundTripWrapper func(http.RoundTripper, *http.Request) (*http.Response, error)
+
+type roundTripWrapper struct {
+	tc        *TestContext
+	transport http.RoundTripper
+}
+
+func (r roundTripWrapper) RoundTrip(req *http.Request) (*http.Response, error) {
+	wrapper := r.tc.RoundTrip.Load()
+	if wrapper != nil {
+		return (*wrapper)(r.transport, req)
+	}
+	return r.transport.RoundTrip(req)
+}
+
+var _ http.RoundTripper = roundTripWrapper{}
 
 // CleanupNodes cleans all nodes which were created during integration test
 func CleanupNodes(cs clientset.Interface, t *testing.T) {
@@ -468,11 +505,16 @@ func UpdateNodeStatus(cs clientset.Interface, node *v1.Node) error {
 func InitTestAPIServer(t *testing.T, nsPrefix string, admission admission.Interface) *TestContext {
 	_, ctx := ktesting.NewTestContext(t)
 	ctx, cancel := context.WithCancel(ctx)
-	testCtx := TestContext{Ctx: ctx}
+	testCtx := &TestContext{Ctx: ctx}
 
 	testCtx.ClientSet, testCtx.KubeConfig, testCtx.CloseFn = framework.StartTestServer(ctx, t, framework.TestServerSetup{
 		ModifyServerRunOptions: func(options *options.ServerRunOptions) {
 			options.Admission.GenericAdmission.DisablePlugins = []string{"ServiceAccount", "TaintNodesByCondition", "Priority", "StorageObjectInUseProtection"}
+			if utilfeature.DefaultFeatureGate.Enabled(features.DynamicResourceAllocation) {
+				options.APIEnablement.RuntimeConfig = cliflag.ConfigurationMap{
+					resourcev1alpha2.SchemeGroupVersion.String(): "true",
+				}
+			}
 		},
 		ModifyServerConfig: func(config *controlplane.Config) {
 			if admission != nil {
@@ -480,6 +522,16 @@ func InitTestAPIServer(t *testing.T, nsPrefix string, admission admission.Interf
 			}
 		},
 	})
+
+	// Support wrapping HTTP requests.
+	testCtx.KubeConfig.Wrap(func(transport http.RoundTripper) http.RoundTripper {
+		return roundTripWrapper{tc: testCtx, transport: transport}
+	})
+	var err error
+	testCtx.ClientSet, err = clientset.NewForConfig(testCtx.KubeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	oldCloseFn := testCtx.CloseFn
 	testCtx.CloseFn = func() {
@@ -494,10 +546,10 @@ func InitTestAPIServer(t *testing.T, nsPrefix string, admission admission.Interf
 	}
 
 	t.Cleanup(func() {
-		CleanupTest(t, &testCtx)
+		CleanupTest(t, testCtx)
 	})
 
-	return &testCtx
+	return testCtx
 }
 
 // WaitForSchedulerCacheCleanup waits for cleanup of scheduler's cache to complete
@@ -560,7 +612,9 @@ func InitTestSchedulerWithOptions(
 		t.Fatalf("Couldn't create scheduler: %v", err)
 	}
 
-	eventBroadcaster.StartRecordingToSink(ctx.Done())
+	if !testCtx.DisableEventSink {
+		eventBroadcaster.StartRecordingToSink(ctx.Done())
+	}
 
 	oldCloseFn := testCtx.CloseFn
 	testCtx.CloseFn = func() {
@@ -652,7 +706,7 @@ func InitTestSchedulerWithNS(t *testing.T, nsPrefix string, opts ...scheduler.Op
 func InitTestDisablePreemption(t *testing.T, nsPrefix string) *TestContext {
 	cfg := configtesting.V1ToInternalWithDefaults(t, kubeschedulerconfigv1.KubeSchedulerConfiguration{
 		Profiles: []kubeschedulerconfigv1.KubeSchedulerProfile{{
-			SchedulerName: pointer.String(v1.DefaultSchedulerName),
+			SchedulerName: ptr.To(v1.DefaultSchedulerName),
 			Plugins: &kubeschedulerconfigv1.Plugins{
 				PostFilter: kubeschedulerconfigv1.PluginSet{
 					Disabled: []kubeschedulerconfigv1.Plugin{
@@ -713,7 +767,7 @@ func createNodes(cs clientset.Interface, prefix string, wrapper *st.NodeWrapper,
 	nodes := make([]*v1.Node, numNodes)
 	for i := 0; i < numNodes; i++ {
 		nodeName := fmt.Sprintf("%v-%d", prefix, i)
-		node, err := CreateNode(cs, wrapper.Name(nodeName).Obj())
+		node, err := CreateNode(cs, wrapper.Name(nodeName).Label("kubernetes.io/hostname", nodeName).Obj())
 		if err != nil {
 			return nodes[:], err
 		}
@@ -1094,10 +1148,11 @@ func NextPodOrDie(t *testing.T, testCtx *TestContext) *schedulerframework.Queued
 	t.Helper()
 
 	var podInfo *schedulerframework.QueuedPodInfo
+	logger := klog.FromContext(testCtx.Ctx)
 	// NextPod() is a blocking operation. Wrap it in timeout() to avoid relying on
 	// default go testing timeout (10m) to abort.
 	if err := timeout(testCtx.Ctx, time.Second*5, func() {
-		podInfo, _ = testCtx.Scheduler.NextPod()
+		podInfo, _ = testCtx.Scheduler.NextPod(logger)
 	}); err != nil {
 		t.Fatalf("Timed out waiting for the Pod to be popped: %v", err)
 	}
@@ -1109,10 +1164,11 @@ func NextPod(t *testing.T, testCtx *TestContext) *schedulerframework.QueuedPodIn
 	t.Helper()
 
 	var podInfo *schedulerframework.QueuedPodInfo
+	logger := klog.FromContext(testCtx.Ctx)
 	// NextPod() is a blocking operation. Wrap it in timeout() to avoid relying on
 	// default go testing timeout (10m) to abort.
 	if err := timeout(testCtx.Ctx, time.Second*5, func() {
-		podInfo, _ = testCtx.Scheduler.NextPod()
+		podInfo, _ = testCtx.Scheduler.NextPod(logger)
 	}); err != nil {
 		return nil
 	}

@@ -31,6 +31,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	"k8s.io/kubernetes/pkg/scheduler/internal/cache"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
+	tf "k8s.io/kubernetes/pkg/scheduler/testing/framework"
 )
 
 func TestNodeResourcesBalancedAllocation(t *testing.T) {
@@ -389,11 +390,11 @@ func TestNodeResourcesBalancedAllocation(t *testing.T) {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 			fh, _ := runtime.NewFramework(ctx, nil, nil, runtime.WithSnapshotSharedLister(snapshot))
-			p, _ := NewBalancedAllocation(&test.args, fh, feature.Features{})
+			p, _ := NewBalancedAllocation(ctx, &test.args, fh, feature.Features{})
 			state := framework.NewCycleState()
 			for i := range test.nodes {
 				if test.runPreScore {
-					status := p.(framework.PreScorePlugin).PreScore(ctx, state, test.pod, test.nodes)
+					status := p.(framework.PreScorePlugin).PreScore(ctx, state, test.pod, tf.BuildNodeInfos(test.nodes))
 					if !status.IsSuccess() {
 						t.Errorf("PreScore is expected to return success, but didn't. Got status: %v", status)
 					}

@@ -82,13 +82,8 @@ func TestImagesListRunWithCustomConfigPath(t *testing.T) {
 			},
 			configContents: []byte(dedent.Dedent(fmt.Sprintf(`
 apiVersion: %s
-kind: InitConfiguration
-nodeRegistration:
-  criSocket: %s
----
-apiVersion: %[1]s
 kind: ClusterConfiguration
-kubernetesVersion: %[3]s`, kubeadmapiv1.SchemeGroupVersion.String(), constants.UnknownCRISocket, constants.CurrentKubernetesVersion))),
+kubernetesVersion: %s`, kubeadmapiv1.SchemeGroupVersion.String(), constants.CurrentKubernetesVersion))),
 		},
 		{
 			name:               "use coredns",
@@ -98,13 +93,8 @@ kubernetesVersion: %[3]s`, kubeadmapiv1.SchemeGroupVersion.String(), constants.U
 			},
 			configContents: []byte(dedent.Dedent(fmt.Sprintf(`
 apiVersion: %s
-kind: InitConfiguration
-nodeRegistration:
-  criSocket: %s
----
-apiVersion: %[1]s
 kind: ClusterConfiguration
-kubernetesVersion: %[3]s`, kubeadmapiv1.SchemeGroupVersion.String(), constants.UnknownCRISocket, constants.MinimumControlPlaneVersion))),
+kubernetesVersion: %s`, kubeadmapiv1.SchemeGroupVersion.String(), constants.MinimumControlPlaneVersion))),
 		},
 	}
 
@@ -245,9 +235,9 @@ func TestConfigImagesListOutput(t *testing.T) {
 registry.k8s.io/kube-controller-manager:{{.KubeVersion}}
 registry.k8s.io/kube-scheduler:{{.KubeVersion}}
 registry.k8s.io/kube-proxy:{{.KubeVersion}}
+registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}}
 registry.k8s.io/pause:{{.PauseVersion}}
 registry.k8s.io/etcd:{{.EtcdVersion}}
-registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}}
 `,
 		},
 		{
@@ -264,9 +254,9 @@ registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}}
         "registry.k8s.io/kube-controller-manager:{{.KubeVersion}}",
         "registry.k8s.io/kube-scheduler:{{.KubeVersion}}",
         "registry.k8s.io/kube-proxy:{{.KubeVersion}}",
+        "registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}}",
         "registry.k8s.io/pause:{{.PauseVersion}}",
-        "registry.k8s.io/etcd:{{.EtcdVersion}}",
-        "registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}}"
+        "registry.k8s.io/etcd:{{.EtcdVersion}}"
     ]
 }
 `,
@@ -283,9 +273,9 @@ images:
 - registry.k8s.io/kube-controller-manager:{{.KubeVersion}}
 - registry.k8s.io/kube-scheduler:{{.KubeVersion}}
 - registry.k8s.io/kube-proxy:{{.KubeVersion}}
+- registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}}
 - registry.k8s.io/pause:{{.PauseVersion}}
 - registry.k8s.io/etcd:{{.EtcdVersion}}
-- registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}}
 kind: Images
 `,
 		},
@@ -299,9 +289,9 @@ kind: Images
 registry.k8s.io/kube-controller-manager:{{.KubeVersion}}
 registry.k8s.io/kube-scheduler:{{.KubeVersion}}
 registry.k8s.io/kube-proxy:{{.KubeVersion}}
+registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}}
 registry.k8s.io/pause:{{.PauseVersion}}
 registry.k8s.io/etcd:{{.EtcdVersion}}
-registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}}
 `,
 		},
 		{
@@ -311,7 +301,7 @@ registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}}
 			},
 			outputFormat: `jsonpath={range.images[*]}{@} {end}`,
 			expectedOutput: "registry.k8s.io/kube-apiserver:{{.KubeVersion}} registry.k8s.io/kube-controller-manager:{{.KubeVersion}} registry.k8s.io/kube-scheduler:{{.KubeVersion}} " +
-				"registry.k8s.io/kube-proxy:{{.KubeVersion}} registry.k8s.io/pause:{{.PauseVersion}} registry.k8s.io/etcd:{{.EtcdVersion}} registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}} ",
+				"registry.k8s.io/kube-proxy:{{.KubeVersion}} registry.k8s.io/coredns/coredns:{{.CoreDNSVersion}} registry.k8s.io/pause:{{.PauseVersion}} registry.k8s.io/etcd:{{.EtcdVersion}} ",
 		},
 	}
 

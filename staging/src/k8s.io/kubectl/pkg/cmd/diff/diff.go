@@ -35,6 +35,7 @@ import (
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 	"k8s.io/cli-runtime/pkg/resource"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/openapi3"
 	"k8s.io/klog/v2"
 	"k8s.io/kubectl/pkg/cmd/apply"
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
@@ -109,7 +110,8 @@ type DiffOptions struct {
 
 	Concurrency      int
 	Selector         string
-	OpenAPISchema    openapi.Resources
+	OpenAPIGetter    openapi.OpenAPIResourcesGetter
+	OpenAPIV3Root    openapi3.Root
 	DynamicClient    dynamic.Interface
 	CmdNamespace     string
 	EnforceNamespace bool
@@ -164,7 +166,7 @@ func NewCmdDiff(f cmdutil.Factory, streams genericiooptions.IOStreams) *cobra.Co
 	})
 
 	usage := "contains the configuration to diff"
-	cmd.Flags().StringArray("prune-allowlist", []string{}, "Overwrite the default whitelist with <group/version/kind> for --prune")
+	cmd.Flags().StringArray("prune-allowlist", []string{}, "Overwrite the default allowlist with <group/version/kind> for --prune")
 	cmd.Flags().Bool("prune", false, "Include resources that would be deleted by pruning. Can be used with -l and default shows all resources would be pruned")
 	cmd.Flags().BoolVar(&options.ShowManagedFields, "show-managed-fields", options.ShowManagedFields, "If true, include managed fields in the diff.")
 	cmd.Flags().IntVar(&options.Concurrency, "concurrency", 1, "Number of objects to process in parallel when diffing against the live version. Larger number = faster, but more memory, I/O and CPU over that shorter period of time.")
@@ -323,7 +325,8 @@ type InfoObject struct {
 	LocalObj        runtime.Object
 	Info            *resource.Info
 	Encoder         runtime.Encoder
-	OpenAPI         openapi.Resources
+	OpenAPIGetter   openapi.OpenAPIResourcesGetter
+	OpenAPIV3Root   openapi3.Root
 	Force           bool
 	ServerSideApply bool
 	FieldManager    string
@@ -395,7 +398,8 @@ func (obj InfoObject) Merged() (runtime.Object, error) {
 		Helper:          helper,
 		Overwrite:       true,
 		BackOff:         clockwork.NewRealClock(),
-		OpenapiSchema:   obj.OpenAPI,
+		OpenAPIGetter:   obj.OpenAPIGetter,
+		OpenAPIV3Root:   obj.OpenAPIV3Root,
 		ResourceVersion: resourceVersion,
 	}
 
@@ -637,9 +641,14 @@ func (o *DiffOptions) Complete(f cmdutil.Factory, cmd *cobra.Command, args []str
 	}
 
 	if !o.ServerSideApply {
-		o.OpenAPISchema, err = f.OpenAPISchema()
-		if err != nil {
-			return err
+		o.OpenAPIGetter = f
+		if !cmdutil.OpenAPIV3Patch.IsDisabled() {
+			openAPIV3Client, err := f.OpenAPIV3Client()
+			if err == nil {
+				o.OpenAPIV3Root = openapi3.NewRoot(openAPIV3Client)
+			} else {
+				klog.V(4).Infof("warning: OpenAPI V3 Patch is enabled but is unable to be loaded. Will fall back to OpenAPI V2")
+			}
 		}
 	}
 
@@ -721,7 +730,8 @@ func (o *DiffOptions) Run() error {
 				LocalObj:        local,
 				Info:            info,
 				Encoder:         scheme.DefaultJSONEncoder(),
-				OpenAPI:         o.OpenAPISchema,
+				OpenAPIGetter:   o.OpenAPIGetter,
+				OpenAPIV3Root:   o.OpenAPIV3Root,
 				Force:           force,
 				ServerSideApply: o.ServerSideApply,
 				FieldManager:    o.FieldManager,

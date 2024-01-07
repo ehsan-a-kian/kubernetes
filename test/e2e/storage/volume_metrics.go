@@ -45,7 +45,7 @@ import (
 
 // This test needs to run in serial because other tests could interfere
 // with metrics being tested here.
-var _ = utils.SIGDescribe("[Serial] Volume metrics", func() {
+var _ = utils.SIGDescribe(framework.WithSerial(), "Volume metrics", func() {
 	var (
 		c              clientset.Interface
 		ns             string
@@ -136,7 +136,7 @@ var _ = utils.SIGDescribe("[Serial] Volume metrics", func() {
 		if !ephemeral {
 			pvc, err = c.CoreV1().PersistentVolumeClaims(pvc.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
 			framework.ExpectNoError(err)
-			framework.ExpectNotEqual(pvc, nil)
+			gomega.Expect(pvc).ToNot(gomega.BeNil())
 		}
 
 		pod := makePod(f, pvc, ephemeral)
@@ -150,8 +150,8 @@ var _ = utils.SIGDescribe("[Serial] Volume metrics", func() {
 
 		updatedStorageMetrics := waitForDetachAndGrabMetrics(ctx, storageOpMetrics, metricsGrabber, pluginName)
 
-		framework.ExpectNotEqual(len(updatedStorageMetrics.latencyMetrics), 0, "Error fetching c-m updated storage metrics")
-		framework.ExpectNotEqual(len(updatedStorageMetrics.statusMetrics), 0, "Error fetching c-m updated storage metrics")
+		gomega.Expect(updatedStorageMetrics.latencyMetrics).ToNot(gomega.BeEmpty(), "Error fetching c-m updated storage metrics")
+		gomega.Expect(updatedStorageMetrics.statusMetrics).ToNot(gomega.BeEmpty(), "Error fetching c-m updated storage metrics")
 
 		volumeOperations := []string{"volume_detach", "volume_attach"}
 
@@ -186,7 +186,7 @@ var _ = utils.SIGDescribe("[Serial] Volume metrics", func() {
 		if !ephemeral {
 			pvc, err = c.CoreV1().PersistentVolumeClaims(pvc.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
 			framework.ExpectNoError(err, "failed to create PVC %s/%s", pvc.Namespace, pvc.Name)
-			framework.ExpectNotEqual(pvc, nil)
+			gomega.Expect(pvc).ToNot(gomega.BeNil())
 		}
 
 		ginkgo.By("Creating a pod and expecting it to fail")
@@ -205,14 +205,14 @@ var _ = utils.SIGDescribe("[Serial] Volume metrics", func() {
 		framework.ExpectNoError(err, "failed to get controller manager metrics")
 		updatedStorageMetrics := getControllerStorageMetrics(updatedControllerMetrics, pluginName)
 
-		framework.ExpectNotEqual(len(updatedStorageMetrics.statusMetrics), 0, "Error fetching c-m updated storage metrics")
+		gomega.Expect(updatedStorageMetrics.statusMetrics).ToNot(gomega.BeEmpty(), "Error fetching c-m updated storage metrics")
 	}
 
 	filesystemMode := func(ctx context.Context, isEphemeral bool) {
 		if !isEphemeral {
 			pvc, err = c.CoreV1().PersistentVolumeClaims(pvc.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
 			framework.ExpectNoError(err)
-			framework.ExpectNotEqual(pvc, nil)
+			gomega.Expect(pvc).ToNot(gomega.BeNil())
 		}
 
 		pod := makePod(f, pvc, isEphemeral)
@@ -277,7 +277,7 @@ var _ = utils.SIGDescribe("[Serial] Volume metrics", func() {
 		if !isEphemeral {
 			pvcBlock, err = c.CoreV1().PersistentVolumeClaims(pvcBlock.Namespace).Create(ctx, pvcBlock, metav1.CreateOptions{})
 			framework.ExpectNoError(err)
-			framework.ExpectNotEqual(pvcBlock, nil)
+			gomega.Expect(pvcBlock).ToNot(gomega.BeNil())
 		}
 
 		pod := makePod(f, pvcBlock, isEphemeral)
@@ -343,7 +343,7 @@ var _ = utils.SIGDescribe("[Serial] Volume metrics", func() {
 		if !isEphemeral {
 			pvc, err = c.CoreV1().PersistentVolumeClaims(pvc.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
 			framework.ExpectNoError(err)
-			framework.ExpectNotEqual(pvc, nil)
+			gomega.Expect(pvc).ToNot(gomega.BeNil())
 		}
 
 		pod := makePod(f, pvc, isEphemeral)
@@ -374,7 +374,7 @@ var _ = utils.SIGDescribe("[Serial] Volume metrics", func() {
 		if !isEphemeral {
 			pvc, err = c.CoreV1().PersistentVolumeClaims(pvc.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
 			framework.ExpectNoError(err)
-			framework.ExpectNotEqual(pvc, nil)
+			gomega.Expect(pvc).ToNot(gomega.BeNil())
 		}
 
 		pod := makePod(f, pvc, isEphemeral)
@@ -404,7 +404,7 @@ var _ = utils.SIGDescribe("[Serial] Volume metrics", func() {
 		if !isEphemeral {
 			pvc, err = c.CoreV1().PersistentVolumeClaims(pvc.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
 			framework.ExpectNoError(err)
-			framework.ExpectNotEqual(pvc, nil)
+			gomega.Expect(pvc).ToNot(gomega.BeNil())
 		}
 
 		pod := makePod(f, pvc, isEphemeral)
@@ -468,7 +468,7 @@ var _ = utils.SIGDescribe("[Serial] Volume metrics", func() {
 		})
 		// TODO(mauriciopoppe): after CSIMigration is turned on we're no longer reporting
 		// the volume_provision metric (removed in #106609), issue to investigate the bug #106773
-		ginkgo.It("should create prometheus metrics for volume provisioning errors [Slow]", func(ctx context.Context) {
+		f.It("should create prometheus metrics for volume provisioning errors", f.WithSlow(), func(ctx context.Context) {
 			provisioningError(ctx, isEphemeral)
 		})
 		ginkgo.It("should create volume metrics with the correct FilesystemMode PVC ref", func(ctx context.Context) {

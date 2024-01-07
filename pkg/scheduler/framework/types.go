@@ -65,6 +65,12 @@ type GVK string
 
 // Constants for GVKs.
 const (
+	// There are a couple of notes about how the scheduler notifies the events of Pods:
+	// - Add: add events could be triggered by either a newly created Pod or an existing Pod that is scheduled to a Node.
+	// - Delete: delete events could be triggered by:
+	//           - a Pod that is deleted
+	//           - a Pod that was assumed, but gets un-assumed due to some errors in the binding cycle.
+	//           - an existing Pod that was unscheduled but gets scheduled to a Node.
 	Pod                   GVK = "Pod"
 	Node                  GVK = "Node"
 	PersistentVolume      GVK = "PersistentVolume"
@@ -85,20 +91,22 @@ type ClusterEventWithHint struct {
 	// and filters out events to reduce useless retry of Pod's scheduling.
 	// It's an optional field. If not set,
 	// the scheduling of Pods will be always retried with backoff when this Event happens.
-	// (the same as QueueAfterBackoff)
+	// (the same as Queue)
 	QueueingHintFn QueueingHintFn
 }
 
 // QueueingHintFn returns a hint that signals whether the event can make a Pod,
 // which was rejected by this plugin in the past scheduling cycle, schedulable or not.
 // It's called before a Pod gets moved from unschedulableQ to backoffQ or activeQ.
+// If it returns an error, we'll take the returned QueueingHint as `Queue` at the caller whatever we returned here so that
+// we can prevent the Pod from being stuck in the unschedulable pod pool.
 //
 // - `pod`: the Pod to be enqueued, which is rejected by this plugin in the past.
 // - `oldObj` `newObj`: the object involved in that event.
 //   - For example, the given event is "Node deleted", the `oldObj` will be that deleted Node.
 //   - `oldObj` is nil if the event is add event.
 //   - `newObj` is nil if the event is delete event.
-type QueueingHintFn func(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) QueueingHint
+type QueueingHintFn func(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (QueueingHint, error)
 
 type QueueingHint int
 
@@ -107,29 +115,16 @@ const (
 	// scheduling of the pod.
 	QueueSkip QueueingHint = iota
 
-	// QueueAfterBackoff implies that the Pod may be schedulable by the event,
-	// and worth retrying the scheduling again after backoff.
-	QueueAfterBackoff
-
-	// QueueImmediately is returned only when it is highly possible that the Pod gets scheduled in the next scheduling.
-	// You should only return QueueImmediately when there is a high chance that the Pod gets scheduled in the next scheduling.
-	// Otherwise, it's detrimental to scheduling throughput.
-	// For example, when the Pod was rejected as waiting for an external resource to be provisioned, that is directly tied to the Pod,
-	// and the event is that the resource is provisioned, then you can return QueueImmediately.
-	// As a counterexample, when the Pod was rejected due to insufficient memory resource,
-	// and the event is that more memory on Node is available, then you should return QueueAfterBackoff instead of QueueImmediately
-	// because other Pods may be waiting for the same resources and only a few of them would schedule in the next scheduling cycle.
-	QueueImmediately
+	// Queue implies that the Pod may be schedulable by the event.
+	Queue
 )
 
 func (s QueueingHint) String() string {
 	switch s {
 	case QueueSkip:
 		return "QueueSkip"
-	case QueueAfterBackoff:
-		return "QueueAfterBackoff"
-	case QueueImmediately:
-		return "QueueImmediately"
+	case Queue:
+		return "Queue"
 	}
 	return ""
 }
@@ -177,9 +172,11 @@ type QueuedPodInfo struct {
 	// It shouldn't be updated once initialized. It's used to record the e2e scheduling
 	// latency for a pod.
 	InitialAttemptTimestamp *time.Time
-	// If a Pod failed in a scheduling cycle, record the plugin names it failed by.
+	// UnschedulablePlugins records the plugin names that the Pod failed with Unschedulable or UnschedulableAndUnresolvable status.
 	// It's registered only when the Pod is rejected in PreFilter, Filter, Reserve, or Permit (WaitOnPermit).
 	UnschedulablePlugins sets.Set[string]
+	// PendingPlugins records the plugin names that the Pod failed with Pending status.
+	PendingPlugins sets.Set[string]
 	// Whether the Pod is scheduling gated (by PreEnqueuePlugins) or not.
 	Gated bool
 }
@@ -288,10 +285,19 @@ type WeightedAffinityTerm struct {
 	Weight int32
 }
 
+// ExtenderName is a fake plugin name put in UnschedulablePlugins when Extender rejected some Nodes.
+const ExtenderName = "Extender"
+
 // Diagnosis records the details to diagnose a scheduling failure.
 type Diagnosis struct {
-	NodeToStatusMap      NodeToStatusMap
+	// NodeToStatusMap records the status of each node
+	// if they're rejected in PreFilter (via PreFilterResult) or Filter plugins.
+	// Nodes that pass PreFilter/Filter plugins are not included in this map.
+	NodeToStatusMap NodeToStatusMap
+	// UnschedulablePlugins are plugins that returns Unschedulable or UnschedulableAndUnresolvable.
 	UnschedulablePlugins sets.Set[string]
+	// UnschedulablePlugins are plugins that returns Pending.
+	PendingPlugins sets.Set[string]
 	// PreFilterMsg records the messages returned from PreFilter plugins.
 	PreFilterMsg string
 	// PostFilterMsg records the messages returned from PostFilter plugins.
@@ -309,6 +315,24 @@ const (
 	// NoNodeAvailableMsg is used to format message when no nodes available.
 	NoNodeAvailableMsg = "0/%v nodes are available"
 )
+
+func (d *Diagnosis) AddPluginStatus(sts *Status) {
+	if sts.Plugin() == "" {
+		return
+	}
+	if sts.IsRejected() {
+		if d.UnschedulablePlugins == nil {
+			d.UnschedulablePlugins = sets.New[string]()
+		}
+		d.UnschedulablePlugins.Insert(sts.Plugin())
+	}
+	if sts.Code() == Pending {
+		if d.PendingPlugins == nil {
+			d.PendingPlugins = sets.New[string]()
+		}
+		d.PendingPlugins.Insert(sts.Plugin())
+	}
+}
 
 // Error returns detailed information of why the pod failed to fit on each node.
 // A message format is "0/X nodes are available: <PreFilterMsg>. <FilterMsg>. <PostFilterMsg>."
@@ -460,8 +484,20 @@ func getNamespacesFromPodAffinityTerm(pod *v1.Pod, podAffinityTerm *v1.PodAffini
 type ImageStateSummary struct {
 	// Size of the image
 	Size int64
-	// Used to track how many nodes have this image
+	// Used to track how many nodes have this image, it is computed from the Nodes field below
+	// during the execution of Snapshot.
 	NumNodes int
+	// A set of node names for nodes having this image present. This field is used for
+	// keeping track of the nodes during update/add/remove events.
+	Nodes sets.Set[string]
+}
+
+// Snapshot returns a copy without Nodes field of ImageStateSummary
+func (iss *ImageStateSummary) Snapshot() *ImageStateSummary {
+	return &ImageStateSummary{
+		Size:     iss.Size,
+		NumNodes: iss.Nodes.Len(),
+	}
 }
 
 // NodeInfo is node level aggregated information.
@@ -638,15 +674,15 @@ func (n *NodeInfo) Node() *v1.Node {
 	return n.node
 }
 
-// Clone returns a copy of this node.
-func (n *NodeInfo) Clone() *NodeInfo {
+// Snapshot returns a copy of this node, Except that ImageStates is copied without the Nodes field.
+func (n *NodeInfo) Snapshot() *NodeInfo {
 	clone := &NodeInfo{
 		node:             n.node,
 		Requested:        n.Requested.Clone(),
 		NonZeroRequested: n.NonZeroRequested.Clone(),
 		Allocatable:      n.Allocatable.Clone(),
 		UsedPorts:        make(HostPortInfo),
-		ImageStates:      n.ImageStates,
+		ImageStates:      make(map[string]*ImageStateSummary),
 		PVCRefCounts:     make(map[string]int),
 		Generation:       n.Generation,
 	}
@@ -668,6 +704,13 @@ func (n *NodeInfo) Clone() *NodeInfo {
 	}
 	if len(n.PodsWithRequiredAntiAffinity) > 0 {
 		clone.PodsWithRequiredAntiAffinity = append([]*PodInfo(nil), n.PodsWithRequiredAntiAffinity...)
+	}
+	if len(n.ImageStates) > 0 {
+		state := make(map[string]*ImageStateSummary, len(n.ImageStates))
+		for imageName, imageState := range n.ImageStates {
+			state[imageName] = imageState.Snapshot()
+		}
+		clone.ImageStates = state
 	}
 	for key, value := range n.PVCRefCounts {
 		clone.PVCRefCounts[key] = value
@@ -717,12 +760,12 @@ func podWithRequiredAntiAffinity(p *v1.Pod) bool {
 		len(affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) != 0
 }
 
-func removeFromSlice(s []*PodInfo, k string) ([]*PodInfo, bool) {
+func removeFromSlice(logger klog.Logger, s []*PodInfo, k string) ([]*PodInfo, bool) {
 	var removed bool
 	for i := range s {
 		tmpKey, err := GetPodKey(s[i].Pod)
 		if err != nil {
-			klog.ErrorS(err, "Cannot get pod key", "pod", klog.KObj(s[i].Pod))
+			logger.Error(err, "Cannot get pod key", "pod", klog.KObj(s[i].Pod))
 			continue
 		}
 		if k == tmpKey {
@@ -741,20 +784,20 @@ func removeFromSlice(s []*PodInfo, k string) ([]*PodInfo, bool) {
 }
 
 // RemovePod subtracts pod information from this NodeInfo.
-func (n *NodeInfo) RemovePod(pod *v1.Pod) error {
+func (n *NodeInfo) RemovePod(logger klog.Logger, pod *v1.Pod) error {
 	k, err := GetPodKey(pod)
 	if err != nil {
 		return err
 	}
 	if podWithAffinity(pod) {
-		n.PodsWithAffinity, _ = removeFromSlice(n.PodsWithAffinity, k)
+		n.PodsWithAffinity, _ = removeFromSlice(logger, n.PodsWithAffinity, k)
 	}
 	if podWithRequiredAntiAffinity(pod) {
-		n.PodsWithRequiredAntiAffinity, _ = removeFromSlice(n.PodsWithRequiredAntiAffinity, k)
+		n.PodsWithRequiredAntiAffinity, _ = removeFromSlice(logger, n.PodsWithRequiredAntiAffinity, k)
 	}
 
 	var removed bool
-	if n.Pods, removed = removeFromSlice(n.Pods, k); removed {
+	if n.Pods, removed = removeFromSlice(logger, n.Pods, k); removed {
 		n.update(pod, -1)
 		return nil
 	}
@@ -782,13 +825,6 @@ func (n *NodeInfo) update(pod *v1.Pod, sign int64) {
 	n.updatePVCRefCounts(pod, sign > 0)
 
 	n.Generation = nextGeneration()
-}
-
-func max(a, b int64) int64 {
-	if a >= b {
-		return a
-	}
-	return b
 }
 
 func calculateResource(pod *v1.Pod) (Resource, int64, int64) {

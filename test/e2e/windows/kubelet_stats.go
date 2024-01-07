@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2ekubelet "k8s.io/kubernetes/test/e2e/framework/kubelet"
 	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
@@ -37,7 +38,7 @@ import (
 	"github.com/onsi/gomega"
 )
 
-var _ = SIGDescribe("[Feature:Windows] Kubelet-Stats [Serial]", func() {
+var _ = sigDescribe(feature.Windows, "Kubelet-Stats", framework.WithSerial(), skipUnlessWindows(func() {
 	f := framework.NewDefaultFramework("kubelet-stats-test-windows-serial")
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
@@ -113,8 +114,9 @@ var _ = SIGDescribe("[Feature:Windows] Kubelet-Stats [Serial]", func() {
 			})
 		})
 	})
-})
-var _ = SIGDescribe("[Feature:Windows] Kubelet-Stats", func() {
+}))
+
+var _ = sigDescribe(feature.Windows, "Kubelet-Stats", skipUnlessWindows(func() {
 	f := framework.NewDefaultFramework("kubelet-stats-test-windows")
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
@@ -204,7 +206,7 @@ var _ = SIGDescribe("[Feature:Windows] Kubelet-Stats", func() {
 			})
 		})
 	})
-})
+}))
 
 // findWindowsNode finds a Windows node that is Ready and Schedulable
 func findWindowsNode(ctx context.Context, f *framework.Framework) (v1.Node, error) {
@@ -225,7 +227,7 @@ func findWindowsNode(ctx context.Context, f *framework.Framework) (v1.Node, erro
 		}
 	}
 
-	if foundNode == false {
+	if !foundNode {
 		e2eskipper.Skipf("Could not find and ready and schedulable Windows nodes")
 	}
 

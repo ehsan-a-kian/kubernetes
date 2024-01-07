@@ -28,12 +28,16 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	statsapi "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
+	kubelettypes "k8s.io/kubelet/pkg/types"
+	"k8s.io/kubernetes/pkg/features"
 	cadvisortest "k8s.io/kubernetes/pkg/kubelet/cadvisor/testing"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	containertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
 	"k8s.io/kubernetes/pkg/kubelet/kuberuntime"
-	"k8s.io/kubernetes/pkg/kubelet/leaky"
 	serverstats "k8s.io/kubernetes/pkg/kubelet/server/stats"
 	statustest "k8s.io/kubernetes/pkg/kubelet/status/testing"
 	"k8s.io/kubernetes/pkg/volume"
@@ -60,23 +64,23 @@ func TestFilterTerminatedContainerInfoAndAssembleByPodCgroupKey(t *testing.T) {
 		// ContainerInfo with past creation time and no CPU/memory usage for
 		// simulating uncleaned cgroups of already terminated containers, which
 		// should not be shown in the results.
-		"/pod0-i-terminated-1":  getTerminatedContainerInfo(seedPastPod0Infra, pName0, namespace, leaky.PodInfraContainerName),
+		"/pod0-i-terminated-1":  getTerminatedContainerInfo(seedPastPod0Infra, pName0, namespace, kubelettypes.PodInfraContainerName),
 		"/pod0-c0-terminated-1": getTerminatedContainerInfo(seedPastPod0Container0, pName0, namespace, cName00),
 
 		// Same as above but uses the same creation time as the latest
 		// containers. They are terminated containers, so they should not be in
 		// the results.
-		"/pod0-i-terminated-2":  getTerminatedContainerInfo(seedPod0Infra, pName0, namespace, leaky.PodInfraContainerName),
+		"/pod0-i-terminated-2":  getTerminatedContainerInfo(seedPod0Infra, pName0, namespace, kubelettypes.PodInfraContainerName),
 		"/pod0-c0-terminated-2": getTerminatedContainerInfo(seedPod0Container0, pName0, namespace, cName00),
 
 		// The latest containers, which should be in the results.
-		"/pod0-i":  getTestContainerInfo(seedPod0Infra, pName0, namespace, leaky.PodInfraContainerName),
+		"/pod0-i":  getTestContainerInfo(seedPod0Infra, pName0, namespace, kubelettypes.PodInfraContainerName),
 		"/pod0-c0": getTestContainerInfo(seedPod0Container0, pName0, namespace, cName00),
 
-		"/pod1-i.slice":  getTestContainerInfo(seedPod0Infra, pName1, namespace, leaky.PodInfraContainerName),
+		"/pod1-i.slice":  getTestContainerInfo(seedPod0Infra, pName1, namespace, kubelettypes.PodInfraContainerName),
 		"/pod1-c1.slice": getTestContainerInfo(seedPod0Container0, pName1, namespace, cName11),
 
-		"/pod2-i-terminated-1": getTerminatedContainerInfo(seedPastPod0Infra, pName2, namespace, leaky.PodInfraContainerName),
+		"/pod2-i-terminated-1": getTerminatedContainerInfo(seedPastPod0Infra, pName2, namespace, kubelettypes.PodInfraContainerName),
 		// ContainerInfo with past creation time and no CPU/memory usage for
 		// simulating uncleaned cgroups of already terminated containers, which
 		// should not be shown in the results.
@@ -170,19 +174,19 @@ func TestCadvisorListPodStats(t *testing.T) {
 		"/kubelet":       getTestContainerInfo(seedKubelet, "", "", ""),
 		"/system":        getTestContainerInfo(seedMisc, "", "", ""),
 		// Pod0 - Namespace0
-		"/pod0-i":  getTestContainerInfo(seedPod0Infra, pName0, namespace0, leaky.PodInfraContainerName),
+		"/pod0-i":  getTestContainerInfo(seedPod0Infra, pName0, namespace0, kubelettypes.PodInfraContainerName),
 		"/pod0-c0": getTestContainerInfo(seedPod0Container0, pName0, namespace0, cName00),
 		"/pod0-c1": getTestContainerInfo(seedPod0Container1, pName0, namespace0, cName01),
 		// Pod1 - Namespace0
-		"/pod1-i":  getTestContainerInfo(seedPod1Infra, pName1, namespace0, leaky.PodInfraContainerName),
+		"/pod1-i":  getTestContainerInfo(seedPod1Infra, pName1, namespace0, kubelettypes.PodInfraContainerName),
 		"/pod1-c0": getTestContainerInfo(seedPod1Container, pName1, namespace0, cName10),
 		// Pod2 - Namespace2
-		"/pod2-i":                        getTestContainerInfo(seedPod2Infra, pName2, namespace2, leaky.PodInfraContainerName),
+		"/pod2-i":                        getTestContainerInfo(seedPod2Infra, pName2, namespace2, kubelettypes.PodInfraContainerName),
 		"/pod2-c0":                       getTestContainerInfo(seedPod2Container, pName2, namespace2, cName20),
-		"/kubepods/burstable/podUIDpod0": getTestContainerInfo(seedPod0Infra, pName0, namespace0, leaky.PodInfraContainerName),
-		"/kubepods/podUIDpod1":           getTestContainerInfo(seedPod1Infra, pName1, namespace0, leaky.PodInfraContainerName),
+		"/kubepods/burstable/podUIDpod0": getTestContainerInfo(seedPod0Infra, pName0, namespace0, kubelettypes.PodInfraContainerName),
+		"/kubepods/podUIDpod1":           getTestContainerInfo(seedPod1Infra, pName1, namespace0, kubelettypes.PodInfraContainerName),
 		// Pod3 - Namespace0
-		"/pod3-i":       getTestContainerInfo(seedPod3Infra, pName3, namespace0, leaky.PodInfraContainerName),
+		"/pod3-i":       getTestContainerInfo(seedPod3Infra, pName3, namespace0, kubelettypes.PodInfraContainerName),
 		"/pod3-c0-init": getTestContainerInfo(seedPod3Container0, pName3, namespace0, cName30),
 		"/pod3-c1":      getTestContainerInfo(seedPod3Container1, pName3, namespace0, cName31),
 	}
@@ -250,7 +254,6 @@ func TestCadvisorListPodStats(t *testing.T) {
 	mockCadvisor.EXPECT().ImagesFsInfo().Return(imagefs, nil)
 
 	mockRuntime := containertest.NewMockRuntime(mockCtrl)
-	mockRuntime.EXPECT().ImageStats(ctx).Return(&kubecontainer.ImageStats{TotalStorageBytes: 123}, nil).AnyTimes()
 
 	ephemeralVolumes := []statsapi.VolumeStats{getPodVolumeStats(seedEphemeralVolume1, "ephemeralVolume1"),
 		getPodVolumeStats(seedEphemeralVolume2, "ephemeralVolume2")}
@@ -398,17 +401,17 @@ func TestCadvisorListPodCPUAndMemoryStats(t *testing.T) {
 		"/kubelet":       getTestContainerInfo(seedKubelet, "", "", ""),
 		"/system":        getTestContainerInfo(seedMisc, "", "", ""),
 		// Pod0 - Namespace0
-		"/pod0-i":  getTestContainerInfo(seedPod0Infra, pName0, namespace0, leaky.PodInfraContainerName),
+		"/pod0-i":  getTestContainerInfo(seedPod0Infra, pName0, namespace0, kubelettypes.PodInfraContainerName),
 		"/pod0-c0": getTestContainerInfo(seedPod0Container0, pName0, namespace0, cName00),
 		"/pod0-c1": getTestContainerInfo(seedPod0Container1, pName0, namespace0, cName01),
 		// Pod1 - Namespace0
-		"/pod1-i":  getTestContainerInfo(seedPod1Infra, pName1, namespace0, leaky.PodInfraContainerName),
+		"/pod1-i":  getTestContainerInfo(seedPod1Infra, pName1, namespace0, kubelettypes.PodInfraContainerName),
 		"/pod1-c0": getTestContainerInfo(seedPod1Container, pName1, namespace0, cName10),
 		// Pod2 - Namespace2
-		"/pod2-i":                        getTestContainerInfo(seedPod2Infra, pName2, namespace2, leaky.PodInfraContainerName),
+		"/pod2-i":                        getTestContainerInfo(seedPod2Infra, pName2, namespace2, kubelettypes.PodInfraContainerName),
 		"/pod2-c0":                       getTestContainerInfo(seedPod2Container, pName2, namespace2, cName20),
-		"/kubepods/burstable/podUIDpod0": getTestContainerInfo(seedPod0Infra, pName0, namespace0, leaky.PodInfraContainerName),
-		"/kubepods/podUIDpod1":           getTestContainerInfo(seedPod1Infra, pName1, namespace0, leaky.PodInfraContainerName),
+		"/kubepods/burstable/podUIDpod0": getTestContainerInfo(seedPod0Infra, pName0, namespace0, kubelettypes.PodInfraContainerName),
+		"/kubepods/podUIDpod1":           getTestContainerInfo(seedPod1Infra, pName1, namespace0, kubelettypes.PodInfraContainerName),
 	}
 
 	// memory limit overrides for each container (used to test available bytes if a memory limit is known)
@@ -520,7 +523,7 @@ func TestCadvisorListPodCPUAndMemoryStats(t *testing.T) {
 	assert.Nil(t, ps.Network)
 }
 
-func TestCadvisorImagesFsStats(t *testing.T) {
+func TestCadvisorImagesFsStatsKubeletSeparateDiskOff(t *testing.T) {
 	ctx := context.Background()
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
@@ -534,11 +537,13 @@ func TestCadvisorImagesFsStats(t *testing.T) {
 		imageStats  = &kubecontainer.ImageStats{TotalStorageBytes: 100}
 	)
 
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KubeletSeparateDiskGC, false)()
+
 	mockCadvisor.EXPECT().ImagesFsInfo().Return(imageFsInfo, nil)
 	mockRuntime.EXPECT().ImageStats(ctx).Return(imageStats, nil)
 
 	provider := newCadvisorStatsProvider(mockCadvisor, &fakeResourceAnalyzer{}, mockRuntime, nil, NewFakeHostStatsProvider())
-	stats, err := provider.ImageFsStats(ctx)
+	stats, _, err := provider.ImageFsStats(ctx)
 	assert.NoError(err)
 
 	assert.Equal(imageFsInfo.Timestamp, stats.Time.Time)
@@ -548,6 +553,110 @@ func TestCadvisorImagesFsStats(t *testing.T) {
 	assert.Equal(imageFsInfo.InodesFree, stats.InodesFree)
 	assert.Equal(imageFsInfo.Inodes, stats.Inodes)
 	assert.Equal(*imageFsInfo.Inodes-*imageFsInfo.InodesFree, *stats.InodesUsed)
+}
+
+func TestCadvisorImagesFsStats(t *testing.T) {
+	ctx := context.Background()
+	mockCtrl := gomock.NewController(t)
+	defer mockCtrl.Finish()
+	var (
+		assert       = assert.New(t)
+		mockCadvisor = cadvisortest.NewMockInterface(mockCtrl)
+		mockRuntime  = containertest.NewMockRuntime(mockCtrl)
+
+		seed        = 1000
+		imageFsInfo = getTestFsInfo(seed)
+	)
+	imageFsInfoCRI := &runtimeapi.FilesystemUsage{
+		Timestamp:  imageFsInfo.Timestamp.Unix(),
+		FsId:       &runtimeapi.FilesystemIdentifier{Mountpoint: "images"},
+		UsedBytes:  &runtimeapi.UInt64Value{Value: imageFsInfo.Usage},
+		InodesUsed: &runtimeapi.UInt64Value{Value: *imageFsInfo.Inodes},
+	}
+	imageFsInfoResponse := &runtimeapi.ImageFsInfoResponse{
+		ImageFilesystems:     []*runtimeapi.FilesystemUsage{imageFsInfoCRI},
+		ContainerFilesystems: []*runtimeapi.FilesystemUsage{imageFsInfoCRI},
+	}
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KubeletSeparateDiskGC, true)()
+
+	mockCadvisor.EXPECT().ImagesFsInfo().Return(imageFsInfo, nil)
+	mockCadvisor.EXPECT().ContainerFsInfo().Return(imageFsInfo, nil)
+	mockRuntime.EXPECT().ImageFsInfo(ctx).Return(imageFsInfoResponse, nil)
+
+	provider := newCadvisorStatsProvider(mockCadvisor, &fakeResourceAnalyzer{}, mockRuntime, nil, NewFakeHostStatsProvider())
+	stats, containerfs, err := provider.ImageFsStats(ctx)
+	assert.NoError(err)
+
+	assert.Equal(imageFsInfo.Timestamp, stats.Time.Time)
+	assert.Equal(imageFsInfo.Available, *stats.AvailableBytes)
+	assert.Equal(imageFsInfo.Capacity, *stats.CapacityBytes)
+	assert.Equal(imageFsInfo.InodesFree, stats.InodesFree)
+	assert.Equal(imageFsInfo.Inodes, stats.Inodes)
+	assert.Equal(*imageFsInfo.Inodes-*imageFsInfo.InodesFree, *stats.InodesUsed)
+
+	assert.Equal(imageFsInfo.Timestamp, containerfs.Time.Time)
+	assert.Equal(imageFsInfo.Available, *containerfs.AvailableBytes)
+	assert.Equal(imageFsInfo.Capacity, *containerfs.CapacityBytes)
+	assert.Equal(imageFsInfo.InodesFree, containerfs.InodesFree)
+	assert.Equal(imageFsInfo.Inodes, containerfs.Inodes)
+	assert.Equal(*imageFsInfo.Inodes-*imageFsInfo.InodesFree, *containerfs.InodesUsed)
+
+}
+
+func TestCadvisorSplitImagesFsStats(t *testing.T) {
+	ctx := context.Background()
+	mockCtrl := gomock.NewController(t)
+	defer mockCtrl.Finish()
+	var (
+		assert       = assert.New(t)
+		mockCadvisor = cadvisortest.NewMockInterface(mockCtrl)
+		mockRuntime  = containertest.NewMockRuntime(mockCtrl)
+
+		seed            = 1000
+		imageFsInfo     = getTestFsInfo(seed)
+		containerSeed   = 1001
+		containerFsInfo = getTestFsInfo(containerSeed)
+	)
+	imageFsInfoCRI := &runtimeapi.FilesystemUsage{
+		Timestamp:  imageFsInfo.Timestamp.Unix(),
+		FsId:       &runtimeapi.FilesystemIdentifier{Mountpoint: "images"},
+		UsedBytes:  &runtimeapi.UInt64Value{Value: imageFsInfo.Usage},
+		InodesUsed: &runtimeapi.UInt64Value{Value: *imageFsInfo.Inodes},
+	}
+	containerFsInfoCRI := &runtimeapi.FilesystemUsage{
+		Timestamp:  containerFsInfo.Timestamp.Unix(),
+		FsId:       &runtimeapi.FilesystemIdentifier{Mountpoint: "containers"},
+		UsedBytes:  &runtimeapi.UInt64Value{Value: containerFsInfo.Usage},
+		InodesUsed: &runtimeapi.UInt64Value{Value: *containerFsInfo.Inodes},
+	}
+	imageFsInfoResponse := &runtimeapi.ImageFsInfoResponse{
+		ImageFilesystems:     []*runtimeapi.FilesystemUsage{imageFsInfoCRI},
+		ContainerFilesystems: []*runtimeapi.FilesystemUsage{containerFsInfoCRI},
+	}
+
+	mockCadvisor.EXPECT().ImagesFsInfo().Return(imageFsInfo, nil)
+	mockCadvisor.EXPECT().ContainerFsInfo().Return(containerFsInfo, nil)
+	mockRuntime.EXPECT().ImageFsInfo(ctx).Return(imageFsInfoResponse, nil)
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KubeletSeparateDiskGC, true)()
+
+	provider := newCadvisorStatsProvider(mockCadvisor, &fakeResourceAnalyzer{}, mockRuntime, nil, NewFakeHostStatsProvider())
+	stats, containerfs, err := provider.ImageFsStats(ctx)
+	assert.NoError(err)
+
+	assert.Equal(imageFsInfo.Timestamp, stats.Time.Time)
+	assert.Equal(imageFsInfo.Available, *stats.AvailableBytes)
+	assert.Equal(imageFsInfo.Capacity, *stats.CapacityBytes)
+	assert.Equal(imageFsInfo.InodesFree, stats.InodesFree)
+	assert.Equal(imageFsInfo.Inodes, stats.Inodes)
+	assert.Equal(*imageFsInfo.Inodes-*imageFsInfo.InodesFree, *stats.InodesUsed)
+
+	assert.Equal(containerFsInfo.Timestamp, containerfs.Time.Time)
+	assert.Equal(containerFsInfo.Available, *containerfs.AvailableBytes)
+	assert.Equal(containerFsInfo.Capacity, *containerfs.CapacityBytes)
+	assert.Equal(containerFsInfo.InodesFree, containerfs.InodesFree)
+	assert.Equal(containerFsInfo.Inodes, containerfs.Inodes)
+	assert.Equal(*containerFsInfo.Inodes-*containerFsInfo.InodesFree, *containerfs.InodesUsed)
+
 }
 
 func TestCadvisorListPodStatsWhenContainerLogFound(t *testing.T) {
@@ -589,7 +698,7 @@ func TestCadvisorListPodStatsWhenContainerLogFound(t *testing.T) {
 		"/kubelet":       getTestContainerInfo(seedKubelet, "", "", ""),
 		"/system":        getTestContainerInfo(seedMisc, "", "", ""),
 		// Pod0 - Namespace0
-		"/pod0-i":  getTestContainerInfo(seedPod0Infra, pName0, namespace0, leaky.PodInfraContainerName),
+		"/pod0-i":  getTestContainerInfo(seedPod0Infra, pName0, namespace0, kubelettypes.PodInfraContainerName),
 		"/pod0-c0": getTestContainerInfo(seedPod0Container0, pName0, namespace0, cName00),
 		"/pod0-c1": getTestContainerInfo(seedPod0Container1, pName0, namespace0, cName01),
 	}

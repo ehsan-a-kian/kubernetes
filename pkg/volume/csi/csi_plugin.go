@@ -234,10 +234,10 @@ func (p *csiPlugin) Init(host volume.VolumeHost) error {
 			return true
 		},
 		csitranslationplugins.AzureFileInTreePluginName: func() bool {
-			return utilfeature.DefaultFeatureGate.Enabled(features.CSIMigrationAzureFile)
+			return true
 		},
 		csitranslationplugins.VSphereInTreePluginName: func() bool {
-			return utilfeature.DefaultFeatureGate.Enabled(features.CSIMigrationvSphere)
+			return true
 		},
 		csitranslationplugins.PortworxVolumePluginName: func() bool {
 			return utilfeature.DefaultFeatureGate.Enabled(features.CSIMigrationPortworx)

@@ -75,12 +75,14 @@ import (
 	"k8s.io/component-helpers/apimachinery/lease"
 	"k8s.io/klog/v2"
 	api "k8s.io/kubernetes/pkg/apis/core"
+	flowcontrolv1 "k8s.io/kubernetes/pkg/apis/flowcontrol/v1"
 	flowcontrolv1beta1 "k8s.io/kubernetes/pkg/apis/flowcontrol/v1beta1"
 	flowcontrolv1beta2 "k8s.io/kubernetes/pkg/apis/flowcontrol/v1beta2"
 	flowcontrolv1beta3 "k8s.io/kubernetes/pkg/apis/flowcontrol/v1beta3"
 	"k8s.io/kubernetes/pkg/controlplane/apiserver/options"
 	"k8s.io/kubernetes/pkg/controlplane/controller/apiserverleasegc"
 	"k8s.io/kubernetes/pkg/controlplane/controller/clusterauthenticationtrust"
+	"k8s.io/kubernetes/pkg/controlplane/controller/defaultservicecidr"
 	"k8s.io/kubernetes/pkg/controlplane/controller/kubernetesservice"
 	"k8s.io/kubernetes/pkg/controlplane/controller/legacytokentracking"
 	"k8s.io/kubernetes/pkg/controlplane/controller/systemnamespaces"
@@ -510,6 +512,20 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		return nil
 	})
 
+	if utilfeature.DefaultFeatureGate.Enabled(features.MultiCIDRServiceAllocator) {
+		m.GenericAPIServer.AddPostStartHookOrDie("start-kubernetes-service-cidr-controller", func(hookContext genericapiserver.PostStartHookContext) error {
+			controller := defaultservicecidr.NewController(
+				c.ExtraConfig.ServiceIPRange,
+				c.ExtraConfig.SecondaryServiceIPRange,
+				clientset,
+			)
+			// The default serviceCIDR must exist before the apiserver is healthy
+			// otherwise the allocators for Services will not work.
+			controller.Start(hookContext.StopCh)
+			return nil
+		})
+	}
+
 	if utilfeature.DefaultFeatureGate.Enabled(features.UnknownVersionInteroperabilityProxy) {
 		peeraddress := getPeerAddress(c.ExtraConfig.PeerAdvertiseAddress, c.GenericConfig.PublicAddress, publicServicePort)
 		peerEndpointCtrl := peerreconcilers.New(
@@ -575,11 +591,6 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 
 	if utilfeature.DefaultFeatureGate.Enabled(apiserverfeatures.APIServerIdentity) {
 		m.GenericAPIServer.AddPostStartHookOrDie("start-kube-apiserver-identity-lease-controller", func(hookContext genericapiserver.PostStartHookContext) error {
-			kubeClient, err := kubernetes.NewForConfig(hookContext.LoopbackClientConfig)
-			if err != nil {
-				return err
-			}
-
 			// generate a context  from stopCh. This is to avoid modifying files which are relying on apiserver
 			// TODO: See if we can pass ctx to the current method
 			ctx := wait.ContextForChannel(hookContext.StopCh)
@@ -591,7 +602,7 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 			// must replace ':,[]' in [ip:port] to be able to store this as a valid label value
 			controller := lease.NewController(
 				clock.RealClock{},
-				kubeClient,
+				clientset,
 				holderIdentity,
 				int32(IdentityLeaseDurationSeconds),
 				nil,
@@ -605,12 +616,8 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		})
 		// TODO: move this into generic apiserver and make the lease identity value configurable
 		m.GenericAPIServer.AddPostStartHookOrDie("start-kube-apiserver-identity-lease-garbage-collector", func(hookContext genericapiserver.PostStartHookContext) error {
-			kubeClient, err := kubernetes.NewForConfig(hookContext.LoopbackClientConfig)
-			if err != nil {
-				return err
-			}
 			go apiserverleasegc.NewAPIServerLeaseGC(
-				kubeClient,
+				clientset,
 				IdentityLeaseGCPeriod,
 				metav1.NamespaceSystem,
 				KubeAPIServerIdentityLeaseLabelSelector,
@@ -620,11 +627,7 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 	}
 
 	m.GenericAPIServer.AddPostStartHookOrDie("start-legacy-token-tracking-controller", func(hookContext genericapiserver.PostStartHookContext) error {
-		kubeClient, err := kubernetes.NewForConfig(hookContext.LoopbackClientConfig)
-		if err != nil {
-			return err
-		}
-		go legacytokentracking.NewController(kubeClient).Run(hookContext.StopCh)
+		go legacytokentracking.NewController(clientset).Run(hookContext.StopCh)
 		return nil
 	})
 
@@ -748,6 +751,7 @@ var (
 		rbacv1.SchemeGroupVersion,
 		storageapiv1.SchemeGroupVersion,
 		schedulingapiv1.SchemeGroupVersion,
+		flowcontrolv1.SchemeGroupVersion,
 	}
 
 	// legacyBetaEnabledByDefaultResources is the list of beta resources we enable.  You may only add to this list

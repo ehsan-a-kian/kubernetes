@@ -17,13 +17,12 @@ limitations under the License.
 package nodeunschedulable
 
 import (
-	"context"
 	"reflect"
 	"testing"
 
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/klog/v2/ktesting"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+	"k8s.io/kubernetes/test/utils/ktesting"
 )
 
 func TestNodeUnschedulable(t *testing.T) {
@@ -75,9 +74,12 @@ func TestNodeUnschedulable(t *testing.T) {
 	for _, test := range testCases {
 		nodeInfo := framework.NewNodeInfo()
 		nodeInfo.SetNode(test.node)
-
-		p, _ := New(nil, nil)
-		gotStatus := p.(framework.FilterPlugin).Filter(context.Background(), nil, test.pod, nodeInfo)
+		_, ctx := ktesting.NewTestContext(t)
+		p, err := New(ctx, nil, nil)
+		if err != nil {
+			t.Fatalf("creating plugin: %v", err)
+		}
+		gotStatus := p.(framework.FilterPlugin).Filter(ctx, nil, test.pod, nodeInfo)
 		if !reflect.DeepEqual(gotStatus, test.wantStatus) {
 			t.Errorf("status does not match: %v, want: %v", gotStatus, test.wantStatus)
 		}
@@ -90,12 +92,14 @@ func TestIsSchedulableAfterNodeChange(t *testing.T) {
 		pod            *v1.Pod
 		oldObj, newObj interface{}
 		expectedHint   framework.QueueingHint
+		expectedErr    bool
 	}{
 		{
 			name:         "backoff-wrong-new-object",
 			pod:          &v1.Pod{},
 			newObj:       "not-a-node",
-			expectedHint: framework.QueueAfterBackoff,
+			expectedHint: framework.Queue,
+			expectedErr:  true,
 		},
 		{
 			name: "backoff-wrong-old-object",
@@ -106,7 +110,8 @@ func TestIsSchedulableAfterNodeChange(t *testing.T) {
 				},
 			},
 			oldObj:       "not-a-node",
-			expectedHint: framework.QueueAfterBackoff,
+			expectedHint: framework.Queue,
+			expectedErr:  true,
 		},
 		{
 			name: "skip-queue-on-unschedulable-node-added",
@@ -126,7 +131,7 @@ func TestIsSchedulableAfterNodeChange(t *testing.T) {
 					Unschedulable: false,
 				},
 			},
-			expectedHint: framework.QueueAfterBackoff,
+			expectedHint: framework.Queue,
 		},
 		{
 			name: "skip-unrelated-change",
@@ -162,7 +167,7 @@ func TestIsSchedulableAfterNodeChange(t *testing.T) {
 					Unschedulable: true,
 				},
 			},
-			expectedHint: framework.QueueAfterBackoff,
+			expectedHint: framework.Queue,
 		},
 	}
 
@@ -170,7 +175,11 @@ func TestIsSchedulableAfterNodeChange(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			logger, _ := ktesting.NewTestContext(t)
 			pl := &NodeUnschedulable{}
-			if got := pl.isSchedulableAfterNodeChange(logger, testCase.pod, testCase.oldObj, testCase.newObj); got != testCase.expectedHint {
+			got, err := pl.isSchedulableAfterNodeChange(logger, testCase.pod, testCase.oldObj, testCase.newObj)
+			if err != nil && !testCase.expectedErr {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if got != testCase.expectedHint {
 				t.Errorf("isSchedulableAfterNodeChange() = %v, want %v", got, testCase.expectedHint)
 			}
 		})

@@ -92,13 +92,6 @@ func standardDeviation(xs []int) float64 {
 	return math.Round(s*1000) / 1000
 }
 
-func min(x, y int) int {
-	if x < y {
-		return x
-	}
-	return y
-}
-
 type numaOrSocketsFirstFuncs interface {
 	takeFullFirstLevel()
 	takeFullSecondLevel()
@@ -453,7 +446,7 @@ func takeByTopologyNUMAPacked(topo *topology.CPUTopology, availableCPUs cpuset.C
 		return acc.result, nil
 	}
 	if acc.isFailed() {
-		return cpuset.New(), fmt.Errorf("not enough cpus available to satisfy request")
+		return cpuset.New(), fmt.Errorf("not enough cpus available to satisfy request: requested=%d, available=%d", numCPUs, availableCPUs.Size())
 	}
 
 	// Algorithm: topology-aware best-fit
@@ -565,7 +558,7 @@ func takeByTopologyNUMADistributed(topo *topology.CPUTopology, availableCPUs cpu
 		return acc.result, nil
 	}
 	if acc.isFailed() {
-		return cpuset.New(), fmt.Errorf("not enough cpus available to satisfy request")
+		return cpuset.New(), fmt.Errorf("not enough cpus available to satisfy request: requested=%d, available=%d", numCPUs, availableCPUs.Size())
 	}
 
 	// Get the list of NUMA nodes represented by the set of CPUs in 'availableCPUs'.

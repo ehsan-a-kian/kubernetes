@@ -43,6 +43,7 @@ import (
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	e2eoutput "k8s.io/kubernetes/test/e2e/framework/pod/output"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
+	"k8s.io/kubernetes/test/e2e/nodefeature"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 	admissionapi "k8s.io/pod-security-admission/api"
 	utilptr "k8s.io/utils/pointer"
@@ -76,7 +77,7 @@ var _ = SIGDescribe("ServiceAccounts", func() {
 	                Token Mount path. All these three files MUST exist and the Service
 	                Account mount path MUST be auto mounted to the Container.
 	*/
-	framework.ConformanceIt("should mount an API token into pods ", func(ctx context.Context) {
+	framework.ConformanceIt("should mount an API token into pods", func(ctx context.Context) {
 		sa, err := f.ClientSet.CoreV1().ServiceAccounts(f.Namespace.Name).Create(ctx, &v1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "mount-test"}}, metav1.CreateOptions{})
 		framework.ExpectNoError(err)
 
@@ -159,7 +160,7 @@ var _ = SIGDescribe("ServiceAccounts", func() {
 	   include test cases 1a,1b,2a,2b and 2c.
 	   In the test cases 1c,3a,3b and 3c the ServiceTokenVolume MUST not be auto mounted.
 	*/
-	framework.ConformanceIt("should allow opting out of API token automount ", func(ctx context.Context) {
+	framework.ConformanceIt("should allow opting out of API token automount", func(ctx context.Context) {
 
 		var err error
 		trueValue := true
@@ -334,7 +335,7 @@ var _ = SIGDescribe("ServiceAccounts", func() {
 	   Containers MUST verify that the projected service account token can be
 	   read and has correct file mode set including ownership and permission.
 	*/
-	ginkgo.It("should set ownership and permission when RunAsUser or FsGroup is present [LinuxOnly] [NodeFeature:FSGroup]", func(ctx context.Context) {
+	f.It("should set ownership and permission when RunAsUser or FsGroup is present [LinuxOnly]", nodefeature.FSGroup, func(ctx context.Context) {
 		e2eskipper.SkipIfNodeOSDistroIs("windows")
 
 		var (
@@ -430,7 +431,7 @@ var _ = SIGDescribe("ServiceAccounts", func() {
 		}
 	})
 
-	ginkgo.It("should support InClusterConfig with token rotation [Slow]", func(ctx context.Context) {
+	f.It("should support InClusterConfig with token rotation", f.WithSlow(), func(ctx context.Context) {
 		tenMin := int64(10 * 60)
 		pod := &v1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: "inclusterclient"},

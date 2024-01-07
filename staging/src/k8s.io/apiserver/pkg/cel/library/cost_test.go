@@ -215,6 +215,263 @@ func TestURLsCost(t *testing.T) {
 	}
 }
 
+func TestIPCost(t *testing.T) {
+	ipv4 := "ip('192.168.0.1')"
+	ipv4BaseEstimatedCost := checker.CostEstimate{Min: 2, Max: 2}
+	ipv4BaseRuntimeCost := uint64(2)
+
+	ipv6 := "ip('2001:db8:3333:4444:5555:6666:7777:8888')"
+	ipv6BaseEstimatedCost := checker.CostEstimate{Min: 4, Max: 4}
+	ipv6BaseRuntimeCost := uint64(4)
+
+	testCases := []struct {
+		ops                []string
+		expectEsimatedCost func(checker.CostEstimate) checker.CostEstimate
+		expectRuntimeCost  func(uint64) uint64
+	}{
+		{
+			// For just parsing the IP, the cost is expected to be the base.
+			ops:                []string{""},
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate { return c },
+			expectRuntimeCost:  func(c uint64) uint64 { return c },
+		},
+		{
+			ops: []string{".family()", ".isUnspecified()", ".isLoopback()", ".isLinkLocalMulticast()", ".isLinkLocalUnicast()", ".isGlobalUnicast()"},
+			// For most other operations, the cost is expected to be the base + 1.
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 1, Max: c.Max + 1}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 1 },
+		},
+	}
+
+	for _, tc := range testCases {
+		for _, op := range tc.ops {
+			t.Run(ipv4+op, func(t *testing.T) {
+				testCost(t, ipv4+op, tc.expectEsimatedCost(ipv4BaseEstimatedCost), tc.expectRuntimeCost(ipv4BaseRuntimeCost))
+			})
+
+			t.Run(ipv6+op, func(t *testing.T) {
+				testCost(t, ipv6+op, tc.expectEsimatedCost(ipv6BaseEstimatedCost), tc.expectRuntimeCost(ipv6BaseRuntimeCost))
+			})
+		}
+	}
+}
+
+func TestIPIsCanonicalCost(t *testing.T) {
+	testCases := []struct {
+		op                 string
+		expectEsimatedCost checker.CostEstimate
+		expectRuntimeCost  uint64
+	}{
+		{
+			op:                 "ip.isCanonical('192.168.0.1')",
+			expectEsimatedCost: checker.CostEstimate{Min: 3, Max: 3},
+			expectRuntimeCost:  3,
+		},
+		{
+			op:                 "ip.isCanonical('2001:db8:3333:4444:5555:6666:7777:8888')",
+			expectEsimatedCost: checker.CostEstimate{Min: 8, Max: 8},
+			expectRuntimeCost:  8,
+		},
+		{
+			op:                 "ip.isCanonical('2001:db8::abcd')",
+			expectEsimatedCost: checker.CostEstimate{Min: 3, Max: 3},
+			expectRuntimeCost:  3,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.op, func(t *testing.T) {
+			testCost(t, tc.op, tc.expectEsimatedCost, tc.expectRuntimeCost)
+		})
+	}
+}
+
+func TestCIDRCost(t *testing.T) {
+	ipv4 := "cidr('192.168.0.0/16')"
+	ipv4BaseEstimatedCost := checker.CostEstimate{Min: 2, Max: 2}
+	ipv4BaseRuntimeCost := uint64(2)
+
+	ipv6 := "cidr('2001:db8::/32')"
+	ipv6BaseEstimatedCost := checker.CostEstimate{Min: 2, Max: 2}
+	ipv6BaseRuntimeCost := uint64(2)
+
+	type testCase struct {
+		ops                []string
+		expectEsimatedCost func(checker.CostEstimate) checker.CostEstimate
+		expectRuntimeCost  func(uint64) uint64
+	}
+
+	cases := []testCase{
+		{
+			// For just parsing the IP, the cost is expected to be the base.
+			ops:                []string{""},
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate { return c },
+			expectRuntimeCost:  func(c uint64) uint64 { return c },
+		},
+		{
+			ops: []string{".ip()", ".prefixLength()", ".masked()"},
+			// For most other operations, the cost is expected to be the base + 1.
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 1, Max: c.Max + 1}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 1 },
+		},
+	}
+
+	//nolint:gocritic
+	ipv4Cases := append(cases, []testCase{
+		{
+			ops: []string{".containsCIDR(cidr('192.0.0.0/30'))"},
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 5, Max: c.Max + 9}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 5 },
+		},
+		{
+			ops: []string{".containsCIDR(cidr('192.168.0.0/16'))"},
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 5, Max: c.Max + 9}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 5 },
+		},
+		{
+			ops: []string{".containsCIDR('192.0.0.0/30')"},
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 5, Max: c.Max + 9}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 5 },
+		},
+		{
+			ops: []string{".containsCIDR('192.168.0.0/16')"},
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 5, Max: c.Max + 9}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 5 },
+		},
+		{
+			ops: []string{".containsIP(ip('192.0.0.1'))"},
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 2, Max: c.Max + 5}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 2 },
+		},
+		{
+			ops: []string{".containsIP(ip('192.169.0.1'))"},
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 3, Max: c.Max + 6}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 3 },
+		},
+		{
+			ops: []string{".containsIP(ip('192.169.169.250'))"},
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 3, Max: c.Max + 6}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 3 },
+		},
+		{
+			ops: []string{".containsIP('192.0.0.1')"},
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 2, Max: c.Max + 5}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 2 },
+		},
+		{
+			ops: []string{".containsIP('192.169.0.1')"},
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 3, Max: c.Max + 6}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 3 },
+		},
+	}...)
+
+	//nolint:gocritic
+	ipv6Cases := append(cases, []testCase{
+		{
+			ops: []string{".containsCIDR(cidr('2001:db8::/126'))"},
+			// For operations like checking if an IP is in a CIDR, the cost is expected to higher.
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 5, Max: c.Max + 9}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 5 },
+		},
+		{
+			ops: []string{".containsCIDR(cidr('2001:db8::/32'))"},
+			// For operations like checking if an IP is in a CIDR, the cost is expected to higher.
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 5, Max: c.Max + 9}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 5 },
+		},
+		{
+			ops: []string{".containsCIDR('2001:db8::/126')"},
+			// For operations like checking if an IP is in a CIDR, the cost is expected to higher.
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 5, Max: c.Max + 9}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 5 },
+		},
+		{
+			ops: []string{".containsCIDR('2001:db8::/32')"},
+			// For operations like checking if an IP is in a CIDR, the cost is expected to higher.
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 5, Max: c.Max + 9}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 5 },
+		},
+		{
+			ops: []string{".containsIP(ip('2001:db8:3333:4444:5555:6666:7777:8888'))"},
+			// For operations like checking if an IP is in a CIDR, the cost is expected to higher.
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 5, Max: c.Max + 8}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 5 },
+		},
+		{
+			ops: []string{".containsIP(ip('2001:db8::1'))"},
+			// For operations like checking if an IP is in a CIDR, the cost is expected to higher.
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 3, Max: c.Max + 6}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 3 },
+		},
+		{
+			ops: []string{".containsIP('2001:db8:3333:4444:5555:6666:7777:8888')"},
+			// For operations like checking if an IP is in a CIDR, the cost is expected to higher.
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 5, Max: c.Max + 8}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 5 },
+		},
+		{
+			ops: []string{".containsIP('2001:db8::1')"},
+			// For operations like checking if an IP is in a CIDR, the cost is expected to higher.
+			expectEsimatedCost: func(c checker.CostEstimate) checker.CostEstimate {
+				return checker.CostEstimate{Min: c.Min + 3, Max: c.Max + 6}
+			},
+			expectRuntimeCost: func(c uint64) uint64 { return c + 3 },
+		},
+	}...)
+
+	for _, tc := range ipv4Cases {
+		for _, op := range tc.ops {
+			t.Run(ipv4+op, func(t *testing.T) {
+				testCost(t, ipv4+op, tc.expectEsimatedCost(ipv4BaseEstimatedCost), tc.expectRuntimeCost(ipv4BaseRuntimeCost))
+			})
+		}
+	}
+
+	for _, tc := range ipv6Cases {
+		for _, op := range tc.ops {
+			t.Run(ipv6+op, func(t *testing.T) {
+				testCost(t, ipv6+op, tc.expectEsimatedCost(ipv6BaseEstimatedCost), tc.expectRuntimeCost(ipv6BaseRuntimeCost))
+			})
+		}
+	}
+}
+
 func TestStringLibrary(t *testing.T) {
 	cases := []struct {
 		name               string
@@ -409,6 +666,354 @@ func TestAuthzLibrary(t *testing.T) {
 	}
 }
 
+func TestQuantityCost(t *testing.T) {
+	cases := []struct {
+		name                string
+		expr                string
+		expectEstimatedCost checker.CostEstimate
+		expectRuntimeCost   uint64
+	}{
+		{
+			name:                "path",
+			expr:                `quantity("12Mi")`,
+			expectEstimatedCost: checker.CostEstimate{Min: 1, Max: 1},
+			expectRuntimeCost:   1,
+		},
+		{
+			name:                "isQuantity",
+			expr:                `isQuantity("20")`,
+			expectEstimatedCost: checker.CostEstimate{Min: 1, Max: 1},
+			expectRuntimeCost:   1,
+		},
+		{
+			name:                "isQuantity_megabytes",
+			expr:                `isQuantity("20M")`,
+			expectEstimatedCost: checker.CostEstimate{Min: 1, Max: 1},
+			expectRuntimeCost:   1,
+		},
+		{
+			name:                "equality_reflexivity",
+			expr:                `quantity("200M") == quantity("200M")`,
+			expectEstimatedCost: checker.CostEstimate{Min: 3, Max: 1844674407370955266},
+			expectRuntimeCost:   3,
+		},
+		{
+			name:                "equality_symmetry",
+			expr:                `quantity("200M") == quantity("0.2G") && quantity("0.2G") == quantity("200M")`,
+			expectEstimatedCost: checker.CostEstimate{Min: 3, Max: 3689348814741910532},
+			expectRuntimeCost:   6,
+		},
+		{
+			name:                "equality_transitivity",
+			expr:                `quantity("2M") == quantity("0.002G") && quantity("2000k") == quantity("2M") && quantity("0.002G") == quantity("2000k")`,
+			expectEstimatedCost: checker.CostEstimate{Min: 3, Max: 5534023222112865798},
+			expectRuntimeCost:   9,
+		},
+		{
+			name:                "quantity_less",
+			expr:                `quantity("50M").isLessThan(quantity("50Mi"))`,
+			expectEstimatedCost: checker.CostEstimate{Min: 3, Max: 3},
+			expectRuntimeCost:   3,
+		},
+		{
+			name:                "quantity_greater",
+			expr:                `quantity("50Mi").isGreaterThan(quantity("50M"))`,
+			expectEstimatedCost: checker.CostEstimate{Min: 3, Max: 3},
+			expectRuntimeCost:   3,
+		},
+		{
+			name:                "compare_equal",
+			expr:                `quantity("200M").compareTo(quantity("0.2G")) > 0`,
+			expectEstimatedCost: checker.CostEstimate{Min: 4, Max: 4},
+			expectRuntimeCost:   4,
+		},
+		{
+			name:                "add_quantity",
+			expr:                `quantity("50k").add(quantity("20")) == quantity("50.02k")`,
+			expectEstimatedCost: checker.CostEstimate{Min: 5, Max: 1844674407370955268},
+			expectRuntimeCost:   5,
+		},
+		{
+			name:                "sub_quantity",
+			expr:                `quantity("50k").sub(quantity("20")) == quantity("49.98k")`,
+			expectEstimatedCost: checker.CostEstimate{Min: 5, Max: 1844674407370955268},
+			expectRuntimeCost:   5,
+		},
+		{
+			name:                "sub_int",
+			expr:                `quantity("50k").sub(20) == quantity("49980")`,
+			expectEstimatedCost: checker.CostEstimate{Min: 4, Max: 1844674407370955267},
+			expectRuntimeCost:   4,
+		},
+		{
+			name:                "arith_chain_1",
+			expr:                `quantity("50k").add(20).sub(quantity("100k")).asInteger() > 0`,
+			expectEstimatedCost: checker.CostEstimate{Min: 6, Max: 6},
+			expectRuntimeCost:   6,
+		},
+		{
+			name:                "arith_chain",
+			expr:                `quantity("50k").add(20).sub(quantity("100k")).sub(-50000).asInteger() > 0`,
+			expectEstimatedCost: checker.CostEstimate{Min: 7, Max: 7},
+			expectRuntimeCost:   7,
+		},
+		{
+			name:                "as_integer",
+			expr:                `quantity("50k").asInteger() > 0`,
+			expectEstimatedCost: checker.CostEstimate{Min: 3, Max: 3},
+			expectRuntimeCost:   3,
+		},
+		{
+			name:                "is_integer",
+			expr:                `quantity("50").isInteger()`,
+			expectEstimatedCost: checker.CostEstimate{Min: 2, Max: 2},
+			expectRuntimeCost:   2,
+		},
+		{
+			name:                "as_float",
+			expr:                `quantity("50.703k").asApproximateFloat() > 0.0`,
+			expectEstimatedCost: checker.CostEstimate{Min: 3, Max: 3},
+			expectRuntimeCost:   3,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			testCost(t, tc.expr, tc.expectEstimatedCost, tc.expectRuntimeCost)
+		})
+	}
+}
+
+func TestSetsCost(t *testing.T) {
+	cases := []struct {
+		name                string
+		expr                string
+		expectEstimatedCost checker.CostEstimate
+		expectRuntimeCost   uint64
+	}{
+		{
+			name:                "sets",
+			expr:                `sets.contains([], [])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 21, Max: 21},
+			expectRuntimeCost:   21,
+		},
+		{
+			expr:                `sets.contains([1], [])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 21, Max: 21},
+			expectRuntimeCost:   21,
+		},
+		{
+			expr:                `sets.contains([1], [1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 22, Max: 22},
+			expectRuntimeCost:   22,
+		},
+		{
+			expr:                `sets.contains([1], [1, 1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `sets.contains([1, 1], [1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `sets.contains([2, 1], [1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `sets.contains([1, 2, 3, 4], [2, 3])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 29, Max: 29},
+			expectRuntimeCost:   29,
+		},
+		{
+			expr:                `sets.contains([1], [1.0, 1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `sets.contains([1, 2], [2u, 2.0])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 25, Max: 25},
+			expectRuntimeCost:   25,
+		},
+		{
+			expr:                `sets.contains([1, 2u], [2, 2.0])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 25, Max: 25},
+			expectRuntimeCost:   25,
+		},
+		{
+			expr:                `sets.contains([1, 2.0, 3u], [1.0, 2u, 3])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 30, Max: 30},
+			expectRuntimeCost:   30,
+		},
+		{
+			expr: `sets.contains([[1], [2, 3]], [[2, 3.0]])`,
+			// 10 for each list creation, top-level list sizes are 2, 1
+			expectEstimatedCost: checker.CostEstimate{Min: 53, Max: 53},
+			expectRuntimeCost:   53,
+		},
+		{
+			expr:                `!sets.contains([1], [2])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `!sets.contains([1], [1, 2])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 24, Max: 24},
+			expectRuntimeCost:   24,
+		},
+		{
+			expr:                `!sets.contains([1], ["1", 1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 24, Max: 24},
+			expectRuntimeCost:   24,
+		},
+		{
+			expr:                `!sets.contains([1], [1.1, 1u])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 24, Max: 24},
+			expectRuntimeCost:   24,
+		},
+
+		// set equivalence (note the cost factor is higher as it's basically two contains checks)
+		{
+			expr:                `sets.equivalent([], [])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 21, Max: 21},
+			expectRuntimeCost:   21,
+		},
+		{
+			expr:                `sets.equivalent([1], [1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `sets.equivalent([1], [1, 1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 25, Max: 25},
+			expectRuntimeCost:   25,
+		},
+		{
+			expr:                `sets.equivalent([1, 1], [1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 25, Max: 25},
+			expectRuntimeCost:   25,
+		},
+		{
+			expr:                `sets.equivalent([1], [1u, 1.0])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 25, Max: 25},
+			expectRuntimeCost:   25,
+		},
+		{
+			expr:                `sets.equivalent([1], [1u, 1.0])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 25, Max: 25},
+			expectRuntimeCost:   25,
+		},
+		{
+			expr:                `sets.equivalent([1, 2, 3], [3u, 2.0, 1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 39, Max: 39},
+			expectRuntimeCost:   39,
+		},
+		{
+			expr:                `sets.equivalent([[1.0], [2, 3]], [[1], [2, 3.0]])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 69, Max: 69},
+			expectRuntimeCost:   69,
+		},
+		{
+			expr:                `!sets.equivalent([2, 1], [1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 26, Max: 26},
+			expectRuntimeCost:   26,
+		},
+		{
+			expr:                `!sets.equivalent([1], [1, 2])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 26, Max: 26},
+			expectRuntimeCost:   26,
+		},
+		{
+			expr:                `!sets.equivalent([1, 2], [2u, 2, 2.0])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 34, Max: 34},
+			expectRuntimeCost:   34,
+		},
+		{
+			expr:                `!sets.equivalent([1, 2], [1u, 2, 2.3])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 34, Max: 34},
+			expectRuntimeCost:   34,
+		},
+		{
+			expr:                `sets.intersects([1], [1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 22, Max: 22},
+			expectRuntimeCost:   22,
+		},
+		{
+			expr:                `sets.intersects([1], [1, 1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `sets.intersects([1, 1], [1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `sets.intersects([2, 1], [1])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `sets.intersects([1], [1, 2])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `sets.intersects([1], [1.0, 2])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `sets.intersects([1, 2], [2u, 2, 2.0])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 27, Max: 27},
+			expectRuntimeCost:   27,
+		},
+		{
+			expr:                `sets.intersects([1, 2], [1u, 2, 2.3])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 27, Max: 27},
+			expectRuntimeCost:   27,
+		},
+		{
+			expr:                `sets.intersects([[1], [2, 3]], [[1, 2], [2, 3.0]])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 65, Max: 65},
+			expectRuntimeCost:   65,
+		},
+		{
+			expr:                `!sets.intersects([], [])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 22, Max: 22},
+			expectRuntimeCost:   22,
+		},
+		{
+			expr:                `!sets.intersects([1], [])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 22, Max: 22},
+			expectRuntimeCost:   22,
+		},
+		{
+			expr:                `!sets.intersects([1], [2])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 23, Max: 23},
+			expectRuntimeCost:   23,
+		},
+		{
+			expr:                `!sets.intersects([1], ["1", 2])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 24, Max: 24},
+			expectRuntimeCost:   24,
+		},
+		{
+			expr:                `!sets.intersects([1], [1.1, 2u])`,
+			expectEstimatedCost: checker.CostEstimate{Min: 24, Max: 24},
+			expectRuntimeCost:   24,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			testCost(t, tc.expr, tc.expectEstimatedCost, tc.expectRuntimeCost)
+		})
+	}
+}
+
 func testCost(t *testing.T, expr string, expectEsimatedCost checker.CostEstimate, expectRuntimeCost uint64) {
 	est := &CostEstimator{SizeEstimator: &testCostEstimator{}}
 	env, err := cel.NewEnv(
@@ -417,6 +1022,13 @@ func testCost(t *testing.T, expr string, expectEsimatedCost checker.CostEstimate
 		Regex(),
 		Lists(),
 		Authz(),
+		Quantity(),
+		ext.Sets(),
+		IP(),
+		CIDR(),
+		// cel-go v0.17.7 introduced CostEstimatorOptions.
+		// Previous the presence has a cost of 0 but cel fixed it to 1. We still set to 0 here to avoid breaking changes.
+		cel.CostEstimatorOptions(checker.PresenceTestHasCost(false)),
 	)
 	if err != nil {
 		t.Fatalf("%v", err)

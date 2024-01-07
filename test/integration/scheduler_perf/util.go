@@ -49,6 +49,7 @@ import (
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	kubeschedulerscheme "k8s.io/kubernetes/pkg/scheduler/apis/config/scheme"
+	frameworkruntime "k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	"k8s.io/kubernetes/test/integration/framework"
 	"k8s.io/kubernetes/test/integration/util"
 	testutils "k8s.io/kubernetes/test/utils"
@@ -82,7 +83,7 @@ func newDefaultComponentConfig() (*config.KubeSchedulerConfiguration, error) {
 // remove resources after finished.
 // Notes on rate limiter:
 //   - client rate limit is set to 5000.
-func mustSetupCluster(ctx context.Context, tb testing.TB, config *config.KubeSchedulerConfiguration, enabledFeatures map[featuregate.Feature]bool) (informers.SharedInformerFactory, clientset.Interface, dynamic.Interface) {
+func mustSetupCluster(ctx context.Context, tb testing.TB, config *config.KubeSchedulerConfiguration, enabledFeatures map[featuregate.Feature]bool, outOfTreePluginRegistry frameworkruntime.Registry) (informers.SharedInformerFactory, clientset.Interface, dynamic.Interface) {
 	// Run API server with minimimal logging by default. Can be raised with -v.
 	framework.MinVerbosity = 0
 
@@ -126,7 +127,7 @@ func mustSetupCluster(ctx context.Context, tb testing.TB, config *config.KubeSch
 
 	// Not all config options will be effective but only those mostly related with scheduler performance will
 	// be applied to start a scheduler, most of them are defined in `scheduler.schedulerOptions`.
-	_, informerFactory := util.StartScheduler(ctx, client, cfg, config)
+	_, informerFactory := util.StartScheduler(ctx, client, cfg, config, outOfTreePluginRegistry)
 	util.StartFakePVController(ctx, client, informerFactory)
 	runGC := util.CreateGCController(ctx, tb, *cfg, informerFactory)
 	runNS := util.CreateNamespaceController(ctx, tb, *cfg, informerFactory)
@@ -147,23 +148,28 @@ func mustSetupCluster(ctx context.Context, tb testing.TB, config *config.KubeSch
 	return informerFactory, client, dynClient
 }
 
-// Returns the list of scheduled pods in the specified namespaces.
+// Returns the list of scheduled and unscheduled pods in the specified namespaces.
 // Note that no namespaces specified matches all namespaces.
-func getScheduledPods(podInformer coreinformers.PodInformer, namespaces ...string) ([]*v1.Pod, error) {
+func getScheduledPods(podInformer coreinformers.PodInformer, namespaces ...string) ([]*v1.Pod, []*v1.Pod, error) {
 	pods, err := podInformer.Lister().List(labels.Everything())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	s := sets.New(namespaces...)
 	scheduled := make([]*v1.Pod, 0, len(pods))
+	unscheduled := make([]*v1.Pod, 0, len(pods))
 	for i := range pods {
 		pod := pods[i]
-		if len(pod.Spec.NodeName) > 0 && (len(s) == 0 || s.Has(pod.Namespace)) {
-			scheduled = append(scheduled, pod)
+		if len(s) == 0 || s.Has(pod.Namespace) {
+			if len(pod.Spec.NodeName) > 0 {
+				scheduled = append(scheduled, pod)
+			} else {
+				unscheduled = append(unscheduled, pod)
+			}
 		}
 	}
-	return scheduled, nil
+	return scheduled, unscheduled, nil
 }
 
 // DataItem is the data point.
@@ -355,7 +361,7 @@ func newThroughputCollector(tb testing.TB, podInformer coreinformers.PodInformer
 }
 
 func (tc *throughputCollector) run(ctx context.Context) {
-	podsScheduled, err := getScheduledPods(tc.podInformer, tc.namespaces...)
+	podsScheduled, _, err := getScheduledPods(tc.podInformer, tc.namespaces...)
 	if err != nil {
 		klog.Fatalf("%v", err)
 	}
@@ -372,7 +378,7 @@ func (tc *throughputCollector) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			now := time.Now()
-			podsScheduled, err := getScheduledPods(tc.podInformer, tc.namespaces...)
+			podsScheduled, _, err := getScheduledPods(tc.podInformer, tc.namespaces...)
 			if err != nil {
 				klog.Fatalf("%v", err)
 			}

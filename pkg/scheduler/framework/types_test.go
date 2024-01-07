@@ -31,6 +31,7 @@ import (
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/kubernetes/pkg/features"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
+	"k8s.io/kubernetes/test/utils/ktesting"
 )
 
 func TestNewResource(t *testing.T) {
@@ -494,7 +495,7 @@ func TestNodeInfoClone(t *testing.T) {
 
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-			ni := test.nodeInfo.Clone()
+			ni := test.nodeInfo.Snapshot()
 			// Modify the field to check if the result is a clone of the origin one.
 			test.nodeInfo.Generation += 10
 			test.nodeInfo.UsedPorts.Remove("127.0.0.1", "TCP", 80)
@@ -1083,10 +1084,11 @@ func TestNodeInfoRemovePod(t *testing.T) {
 
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+			logger, _ := ktesting.NewTestContext(t)
 			ni := fakeNodeInfo(pods...)
 
 			gen := ni.Generation
-			err := ni.RemovePod(test.pod)
+			err := ni.RemovePod(logger, test.pod)
 			if err != nil {
 				if test.errExpected {
 					expectedErrorMsg := fmt.Errorf("no corresponding pod %s in pods of node %s", test.pod.Name, ni.Node().Name)

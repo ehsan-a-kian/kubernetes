@@ -39,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	e2epv "k8s.io/kubernetes/test/e2e/framework/pv"
@@ -199,7 +200,7 @@ func (p *provisioningTestSuite) DefineTests(driver storageframework.TestDriver, 
 		l.testCase.TestDynamicProvisioning(ctx)
 	})
 
-	ginkgo.It("should provision storage with snapshot data source [Feature:VolumeSnapshotDataSource]", func(ctx context.Context) {
+	f.It("should provision storage with snapshot data source", feature.VolumeSnapshotDataSource, func(ctx context.Context) {
 		if !dInfo.Capabilities[storageframework.CapSnapshotDataSource] {
 			e2eskipper.Skipf("Driver %q does not support populating data from snapshot - skipping", dInfo.Name)
 		}
@@ -235,7 +236,7 @@ func (p *provisioningTestSuite) DefineTests(driver storageframework.TestDriver, 
 		l.testCase.TestDynamicProvisioning(ctx)
 	})
 
-	ginkgo.It("should provision storage with snapshot data source (ROX mode) [Feature:VolumeSnapshotDataSource]", func(ctx context.Context) {
+	f.It("should provision storage with snapshot data source (ROX mode)", feature.VolumeSnapshotDataSource, func(ctx context.Context) {
 		if !dInfo.Capabilities[storageframework.CapSnapshotDataSource] {
 			e2eskipper.Skipf("Driver %q does not support populating data from snapshot - skipping", dInfo.Name)
 		}
@@ -277,7 +278,7 @@ func (p *provisioningTestSuite) DefineTests(driver storageframework.TestDriver, 
 		l.testCase.TestDynamicProvisioning(ctx)
 	})
 
-	ginkgo.It("should provision storage with any volume data source [Serial]", func(ctx context.Context) {
+	f.It("should provision storage with any volume data source", f.WithSerial(), func(ctx context.Context) {
 		if len(dInfo.InTreePluginName) != 0 {
 			e2eskipper.Skipf("AnyVolumeDataSource feature only works with CSI drivers - skipping")
 		}
@@ -449,7 +450,7 @@ func (p *provisioningTestSuite) DefineTests(driver storageframework.TestDriver, 
 		l.testCase.TestDynamicProvisioning(ctx)
 	})
 
-	ginkgo.It("should provision correct filesystem size when restoring snapshot to larger size pvc [Feature:VolumeSnapshotDataSource]", func(ctx context.Context) {
+	f.It("should provision correct filesystem size when restoring snapshot to larger size pvc", feature.VolumeSnapshotDataSource, func(ctx context.Context) {
 		//TODO: remove skip when issue is resolved - https://github.com/kubernetes/kubernetes/issues/113359
 		if framework.NodeOSDistroIs("windows") {
 			e2eskipper.Skipf("Test is not valid Windows - skipping")
@@ -612,7 +613,7 @@ func (p *provisioningTestSuite) DefineTests(driver storageframework.TestDriver, 
 		l.testCase.TestDynamicProvisioning(ctx)
 	})
 
-	ginkgo.It("should provision storage with pvc data source in parallel [Slow]", func(ctx context.Context) {
+	f.It("should provision storage with pvc data source in parallel", f.WithSlow(), func(ctx context.Context) {
 		// Test cloning a single volume multiple times.
 		if !dInfo.Capabilities[storageframework.CapPVCDataSource] {
 			e2eskipper.Skipf("Driver %q does not support cloning - skipping", dInfo.Name)
@@ -965,7 +966,7 @@ func PVMultiNodeCheck(ctx context.Context, client clientset.Interface, timeouts 
 	framework.ExpectNoError(e2epod.WaitForPodSuccessInNamespaceTimeout(ctx, client, pod.Name, pod.Namespace, timeouts.PodStartSlow))
 	runningPod, err = client.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
 	framework.ExpectNoError(err, "get pod")
-	framework.ExpectNotEqual(runningPod.Spec.NodeName, actualNodeName, "second pod should have run on a different node")
+	gomega.Expect(runningPod.Spec.NodeName).ToNot(gomega.Equal(actualNodeName), "second pod should have run on a different node")
 	StopPod(ctx, client, pod)
 	pod = nil
 }
@@ -973,7 +974,7 @@ func PVMultiNodeCheck(ctx context.Context, client clientset.Interface, timeouts 
 // TestBindingWaitForFirstConsumerMultiPVC tests the binding with WaitForFirstConsumer mode
 func (t StorageClassTest) TestBindingWaitForFirstConsumerMultiPVC(ctx context.Context, claims []*v1.PersistentVolumeClaim, nodeSelector map[string]string, expectUnschedulable bool) ([]*v1.PersistentVolume, *v1.Node) {
 	var err error
-	framework.ExpectNotEqual(len(claims), 0)
+	gomega.Expect(claims).ToNot(gomega.BeEmpty())
 	namespace := claims[0].Namespace
 
 	ginkgo.By("creating claims")

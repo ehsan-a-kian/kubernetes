@@ -49,21 +49,7 @@ export GOBIN="${KUBE_OUTPUT_BINPATH}"
 PATH="${GOBIN}:${PATH}"
 
 invocation=(./hack/verify-golangci-lint.sh "$@")
-
-# Disable warnings about the logcheck plugin using the old API
-# (https://github.com/golangci/golangci-lint/issues/4001).
-# Can be removed once logcheck gets updated to a newer release
-# which uses the new plugin API
-export GOLANGCI_LINT_HIDE_WARNING_ABOUT_PLUGIN_API_DEPRECATION=1
-
-# The logcheck plugin currently has to be configured via env variables
-# (https://github.com/golangci/golangci-lint/issues/1512).
-#
-# Remember to clean the golangci-lint cache when changing
-# the configuration and running this script multiple times,
-# otherwise golangci-lint will report stale results:
-# _output/local/bin/golangci-lint cache clean
-golangci=(env LOGCHECK_CONFIG="${KUBE_ROOT}/hack/logcheck.conf" "${GOBIN}/golangci-lint" run)
+golangci=("${GOBIN}/golangci-lint" run)
 golangci_config="${KUBE_ROOT}/hack/golangci.yaml"
 base=
 strict=
@@ -105,10 +91,6 @@ while getopts "ar:sng:c:" o; do
      ;;
   esac
 done
-
-if [ "${golangci_config}" ]; then
-    golangci+=(--config="${golangci_config}")
-fi
 
 # Below the output of golangci-lint is going to be piped into sed to add
 # a prefix to each output line. This helps make the output more visible
@@ -159,6 +141,22 @@ pushd "${KUBE_ROOT}/hack/tools" >/dev/null
   fi
 popd >/dev/null
 
+if [ "${golangci_config}" ]; then
+  # The relative path to _output/local/bin only works if that actually is the
+  # GOBIN. If not, then we have to make a temporary copy of the config and
+  # replace the path with an absolute one. This could be done also
+  # unconditionally, but the invocation that is printed below is nicer if we
+  # don't to do it when not required.
+  if grep -q 'path: ../_output/local/bin/' "${golangci_config}" &&
+     [ "${GOBIN}" != "${KUBE_ROOT}/_output/local/bin" ]; then
+    kube::util::ensure-temp-dir
+    patched_golangci_config="${KUBE_TEMP}/$(basename "${golangci_config}")"
+    sed -e "s;path: ../_output/local/bin/;path: ${GOBIN}/;" "${golangci_config}" >"${patched_golangci_config}"
+    golangci_config="${patched_golangci_config}"
+  fi
+  golangci+=(--config="${golangci_config}")
+fi
+
 cd "${KUBE_ROOT}"
 
 res=0
@@ -199,18 +197,30 @@ else
     echo 'If the above warnings do not make sense, you can exempt this warning with a comment'
     echo ' (if your reviewer is okay with it).'
     if [ "$strict" ]; then
-        echo 'The more strict golangci-strict.yaml was used.'
+        echo
+        echo 'golangci-strict.yaml was used as configuration. Warnings must be fixed in'
+        echo 'new or modified code.'
     elif [ "$hints" ]; then
-        echo 'The golangci-hints.yaml was used. Some of the reported issues may have to be fixed'
-        echo 'while others can be ignored, depending on the circumstances and/or personal'
-        echo 'preferences. To determine which issues have to be fixed, check the report that'
-        echo 'uses golangci-strict.yaml.'
+        echo
+        echo 'golangci-hints.yaml was used as configuration. Some of the reported issues may'
+        echo 'have to be fixed while others can be ignored, depending on the circumstances'
+        echo 'and/or personal preferences. To determine which issues have to be fixed, check'
+        echo 'the report that uses golangci-strict.yaml (= pull-kubernetes-verify-lint).'
     fi
     if [ "$strict" ] || [ "$hints" ]; then
+        echo
         echo 'If you feel that this warns about issues that should be ignored by default,'
         echo 'then please discuss with your reviewer and propose'
         echo 'a change for hack/golangci.yaml.in as part of your PR.'
+        echo
+        echo 'Please do not create PRs which fix these issues in existing code just'
+        echo 'because the linter warns about them. Often they are harmless and not'
+        echo 'worth the cost associated with a PR (time required to review, code churn).'
+        echo 'Instead, propose to fix certain linter issues in an issue first and'
+        echo 'discuss there with maintainers. PRs are welcome if they address a real'
+        echo 'problem, which then needs to be explained in the PR.'
     fi
+    echo
     echo 'In general please prefer to fix the error, we have already disabled specific lints'
     echo ' that the project chooses to ignore.'
     echo 'See: https://golangci-lint.run/usage/false-positives/'

@@ -72,6 +72,7 @@ func ValidateClusterConfiguration(c *kubeadm.ClusterConfiguration) field.ErrorLi
 	allErrs = append(allErrs, ValidateHostPort(c.ControlPlaneEndpoint, field.NewPath("controlPlaneEndpoint"))...)
 	allErrs = append(allErrs, ValidateImageRepository(c.ImageRepository, field.NewPath("imageRepository"))...)
 	allErrs = append(allErrs, ValidateEtcd(&c.Etcd, field.NewPath("etcd"))...)
+	allErrs = append(allErrs, ValidateEncryptionAlgorithm(string(c.EncryptionAlgorithm), field.NewPath("encryptionAlgorithm"))...)
 	allErrs = append(allErrs, componentconfigs.Validate(c)...)
 	return allErrs
 }
@@ -333,6 +334,17 @@ func ValidateEtcd(e *kubeadm.Etcd, fldPath *field.Path) field.ErrorList {
 		if e.External.KeyFile != "" {
 			allErrs = append(allErrs, ValidateAbsolutePath(e.External.KeyFile, externalPath.Child("keyFile"))...)
 		}
+	}
+	return allErrs
+}
+
+// ValidateEncryptionAlgorithm validates the public key algorithm
+func ValidateEncryptionAlgorithm(algo string, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	if algo != string(kubeadm.EncryptionAlgorithmRSA) && algo != string(kubeadm.EncryptionAlgorithmECDSA) {
+		msg := fmt.Sprintf("Invalid encryption algorithm. Must be %q or %q",
+			kubeadm.EncryptionAlgorithmRSA, kubeadm.EncryptionAlgorithmECDSA)
+		allErrs = append(allErrs, field.Invalid(fldPath, algo, msg))
 	}
 	return allErrs
 }
@@ -695,6 +707,7 @@ func ValidateResetConfiguration(c *kubeadm.ResetConfiguration) field.ErrorList {
 	allErrs := field.ErrorList{}
 	allErrs = append(allErrs, ValidateSocketPath(c.CRISocket, field.NewPath("criSocket"))...)
 	allErrs = append(allErrs, ValidateAbsolutePath(c.CertificatesDir, field.NewPath("certificatesDir"))...)
+	allErrs = append(allErrs, ValidateUnmountFlags(c.UnmountFlags, field.NewPath("unmountFlags"))...)
 	return allErrs
 }
 
@@ -705,6 +718,22 @@ func ValidateExtraArgs(args []kubeadm.Arg, fldPath *field.Path) field.ErrorList 
 	for idx, arg := range args {
 		if len(arg.Name) == 0 {
 			allErrs = append(allErrs, field.Invalid(fldPath, fmt.Sprintf("index %d", idx), "argument has no name"))
+		}
+	}
+
+	return allErrs
+}
+
+// ValidateUnmountFlags validates a set of unmount flags and collects all encountered errors
+func ValidateUnmountFlags(flags []string, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	for idx, flag := range flags {
+		switch flag {
+		case kubeadm.UnmountFlagMNTForce, kubeadm.UnmountFlagMNTDetach, kubeadm.UnmountFlagMNTExpire, kubeadm.UnmountFlagUmountNoFollow:
+			continue
+		default:
+			allErrs = append(allErrs, field.Invalid(fldPath, fmt.Sprintf("index %d", idx), fmt.Sprintf("unknown unmount flag %s", flag)))
 		}
 	}
 

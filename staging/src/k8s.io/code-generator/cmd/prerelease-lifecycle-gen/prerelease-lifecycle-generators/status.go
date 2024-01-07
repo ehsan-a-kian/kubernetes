@@ -204,7 +204,7 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 		if ptag != nil {
 			pkgNeedsGeneration, err = strconv.ParseBool(ptag.value)
 			if err != nil {
-				klog.Fatalf("Package %v: unsupported %s value: %q :%w", i, tagEnabledName, ptag.value, err)
+				klog.Fatalf("Package %v: unsupported %s value: %q :%v", i, tagEnabledName, ptag.value, err)
 			}
 		}
 		if !pkgNeedsGeneration {
@@ -223,7 +223,7 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 				if ttag != nil && ttag.value == "true" {
 					klog.V(5).Infof("    tag=true")
 					if !isAPIType(t) {
-						klog.Fatalf("Type %v requests deepcopy generation but is not copyable", t)
+						klog.Fatalf("Type %v requests prerelease generation but is not an API type", t)
 					}
 					pkgNeedsGeneration = true
 					break

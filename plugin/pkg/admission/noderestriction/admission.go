@@ -258,6 +258,17 @@ func (p *Plugin) admitPodCreate(nodeName string, a admission.Attributes) error {
 	if hasConfigMaps {
 		return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference configmaps", nodeName))
 	}
+
+	for _, vol := range pod.Spec.Volumes {
+		if vol.VolumeSource.Projected != nil {
+			for _, src := range vol.VolumeSource.Projected.Sources {
+				if src.ClusterTrustBundle != nil {
+					return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference clustertrustbundles", nodeName))
+				}
+			}
+		}
+	}
+
 	for _, v := range pod.Spec.Volumes {
 		if v.PersistentVolumeClaim != nil {
 			return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference persistentvolumeclaims", nodeName))
@@ -565,6 +576,12 @@ func (p *Plugin) admitServiceAccount(nodeName string, a admission.Attributes) er
 	if pod.Spec.NodeName != nodeName {
 		return admission.NewForbidden(a, fmt.Errorf("node requested token bound to a pod scheduled on a different node"))
 	}
+
+	// Note: A token may only be bound to one object at a time. By requiring
+	// the Pod binding, noderestriction eliminates the opportunity to spoof
+	// a Node binding. Instead, kube-apiserver automatically infers and sets
+	// the Node binding when it receives a Pod binding. See:
+	// https://github.com/kubernetes/kubernetes/issues/121723 for more info.
 
 	return nil
 }

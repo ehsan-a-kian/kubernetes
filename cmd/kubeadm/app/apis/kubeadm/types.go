@@ -17,8 +17,6 @@ limitations under the License.
 package kubeadm
 
 import (
-	"crypto/x509"
-
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -122,6 +120,9 @@ type ClusterConfiguration struct {
 	// DNS defines the options for the DNS add-on installed in the cluster.
 	DNS DNS
 
+	// Proxy defines the options for the proxy add-on installed in the cluster.
+	Proxy Proxy
+
 	// CertificatesDir specifies where to store or look for all required certificates.
 	CertificatesDir string
 
@@ -141,6 +142,10 @@ type ClusterConfiguration struct {
 
 	// The cluster name
 	ClusterName string
+
+	// EncryptionAlgorithm holds the type of asymmetric encryption algorithm used for keys and certificates.
+	// Can be "RSA" (default algorithm, key size is 2048) or "ECDSA" (uses the P-256 elliptic curve).
+	EncryptionAlgorithm EncryptionAlgorithmType
 }
 
 // ControlPlaneComponent holds settings common to control plane component of the cluster
@@ -173,8 +178,17 @@ type APIServer struct {
 
 // DNS defines the DNS addon that should be used in the cluster
 type DNS struct {
-	// ImageMeta allows to customize the image used for the DNS component
+	// ImageMeta allows to customize the image used for the DNS addon
 	ImageMeta `json:",inline"`
+
+	// Disabled specifies whether to disable this addon in the cluster
+	Disabled bool
+}
+
+// Proxy defines the proxy addon that should be used in the cluster
+type Proxy struct {
+	// Disabled specifies whether to disable this addon in the cluster
+	Disabled bool
 }
 
 // ImageMeta allows to customize the image used for components that are not
@@ -403,13 +417,18 @@ func (cfg *ClusterConfiguration) GetControlPlaneImageRepository() string {
 	return cfg.ImageRepository
 }
 
-// PublicKeyAlgorithm returns the type of encryption keys used in the cluster.
-func (cfg *ClusterConfiguration) PublicKeyAlgorithm() x509.PublicKeyAlgorithm {
-	if features.Enabled(cfg.FeatureGates, features.PublicKeysECDSA) {
-		return x509.ECDSA
+// EncryptionAlgorithmType returns the type of encryption keys used in the cluster.
+func (cfg *ClusterConfiguration) EncryptionAlgorithmType() EncryptionAlgorithmType {
+	// If the feature gate is set to true, or false respect it.
+	// If the feature gate is not set, use the EncryptionAlgorithm field (v1beta4).
+	// TODO: remove this function when the feature gate is removed.
+	if enabled, ok := cfg.FeatureGates[features.PublicKeysECDSA]; ok {
+		if enabled {
+			return EncryptionAlgorithmECDSA
+		}
+		return EncryptionAlgorithmRSA
 	}
-
-	return x509.RSA
+	return cfg.EncryptionAlgorithm
 }
 
 // HostPathMount contains elements describing volumes that are mounted from the
@@ -503,7 +522,23 @@ type ResetConfiguration struct {
 	// SkipPhases is a list of phases to skip during command execution.
 	// The list of phases can be obtained with the "kubeadm reset phase --help" command.
 	SkipPhases []string
+
+	// UnmountFlags is a list of unmount2() syscall flags that kubeadm can use when unmounting
+	// directories during "reset". A flag can be one of: MNT_FORCE, MNT_DETACH, MNT_EXPIRE, UMOUNT_NOFOLLOW.
+	// By default this list is empty.
+	UnmountFlags []string
 }
+
+const (
+	// UnmountFlagMNTForce represents the flag "MNT_FORCE"
+	UnmountFlagMNTForce = "MNT_FORCE"
+	// UnmountFlagMNTDetach represents the flag "MNT_DETACH"
+	UnmountFlagMNTDetach = "MNT_DETACH"
+	// UnmountFlagMNTExpire represents the flag "MNT_EXPIRE"
+	UnmountFlagMNTExpire = "MNT_EXPIRE"
+	// UnmountFlagUmountNoFollow represents the flag "UMOUNT_NOFOLLOW"
+	UnmountFlagUmountNoFollow = "UMOUNT_NOFOLLOW"
+)
 
 // ComponentConfigMap is a map between a group name (as in GVK group) and a ComponentConfig
 type ComponentConfigMap map[string]ComponentConfig
@@ -518,3 +553,13 @@ type Arg struct {
 type EnvVar struct {
 	v1.EnvVar
 }
+
+// EncryptionAlgorithmType can define an asymmetric encryption algorithm type.
+type EncryptionAlgorithmType string
+
+const (
+	// EncryptionAlgorithmECDSA defines the ECDSA encryption algorithm type.
+	EncryptionAlgorithmECDSA EncryptionAlgorithmType = "ECDSA"
+	// EncryptionAlgorithmRSA defines the RSA encryption algorithm type.
+	EncryptionAlgorithmRSA EncryptionAlgorithmType = "RSA"
+)

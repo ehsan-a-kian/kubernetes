@@ -41,7 +41,6 @@ import (
 	"k8s.io/kubernetes/test/e2e/storage/testsuites"
 	"k8s.io/kubernetes/test/e2e/storage/utils"
 
-	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 )
 
@@ -170,10 +169,12 @@ func AddDriverDefinition(filename string) error {
 		return fmt.Errorf("%q: DriverInfo.Name not set", filename)
 	}
 
-	description := "External Storage " + storageframework.GetDriverNameWithFeatureTags(driver)
-	ginkgo.Describe(description, func() {
+	args := []interface{}{"External Storage"}
+	args = append(args, storageframework.GetDriverNameWithFeatureTags(driver)...)
+	args = append(args, func() {
 		storageframework.DefineTestSuites(driver, testsuites.CSISuites)
 	})
+	framework.Describe(args...)
 
 	return nil
 }
@@ -298,7 +299,7 @@ func (d *driverDefinition) GetDynamicProvisionStorageClass(ctx context.Context, 
 		}
 	}
 
-	framework.ExpectNotEqual(sc, nil, "storage class is unexpectantly nil")
+	gomega.Expect(sc).ToNot(gomega.BeNil(), "storage class is unexpectantly nil")
 
 	if fsType != "" {
 		if sc.Parameters == nil {

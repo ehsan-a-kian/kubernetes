@@ -742,7 +742,7 @@ spec:
             add:
             - NET_BIND_SERVICE
             drop:
-            - all
+            - ALL
           readOnlyRootFilesystem: true
       dnsPolicy: Default
       volumes:
@@ -862,8 +862,7 @@ metadata:
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			out := &bytes.Buffer{}
-			var replicas int32
-			replicas = 3
+			var replicas int32 = 3
 			if err := coreDNSAddon(tt.args.cfg, tt.args.client, &replicas, out, tt.args.printManifest); (err != nil) != tt.wantErr {
 				t.Errorf("coreDNSAddon() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -1008,7 +1007,7 @@ spec:
             add:
             - NET_BIND_SERVICE
             drop:
-            - all
+            - ALL
           readOnlyRootFilesystem: true
       dnsPolicy: Default
       volumes:

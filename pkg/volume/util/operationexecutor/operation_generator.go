@@ -506,9 +506,13 @@ func (og *operationGenerator) GenerateDetachVolumeFunc(
 		migrated := getMigratedStatusBySpec(volumeToDetach.VolumeSpec)
 
 		if err != nil {
-			// On failure, add volume back to ReportAsAttached list
-			actualStateOfWorld.AddVolumeToReportAsAttached(
-				logger, volumeToDetach.VolumeName, volumeToDetach.NodeName)
+			// On failure, mark the volume as uncertain. Attach() must succeed before adding the volume back
+			// to node status as attached.
+			uncertainError := actualStateOfWorld.MarkVolumeAsUncertain(
+				logger, volumeToDetach.VolumeName, volumeToDetach.VolumeSpec, volumeToDetach.NodeName)
+			if uncertainError != nil {
+				klog.Errorf("DetachVolume.MarkVolumeAsUncertain failed to add the volume %q to actual state after detach error: %s", volumeToDetach.VolumeName, uncertainError)
+			}
 			eventErr, detailedErr := volumeToDetach.GenerateError("DetachVolume.Detach failed", err)
 			return volumetypes.NewOperationContext(eventErr, detailedErr, migrated)
 		}
@@ -576,8 +580,7 @@ func (og *operationGenerator) GenerateMountVolumeFunc(
 		}
 
 		// Enforce ReadWriteOncePod access mode if it is the only one present. This is also enforced during scheduling.
-		if utilfeature.DefaultFeatureGate.Enabled(features.ReadWriteOncePod) &&
-			actualStateOfWorld.IsVolumeMountedElsewhere(volumeToMount.VolumeName, volumeToMount.PodName) &&
+		if actualStateOfWorld.IsVolumeMountedElsewhere(volumeToMount.VolumeName, volumeToMount.PodName) &&
 			// Because we do not know what access mode the pod intends to use if there are multiple.
 			len(volumeToMount.VolumeSpec.PersistentVolume.Spec.AccessModes) == 1 &&
 			v1helper.ContainsAccessMode(volumeToMount.VolumeSpec.PersistentVolume.Spec.AccessModes, v1.ReadWriteOncePod) {
@@ -777,6 +780,12 @@ func (og *operationGenerator) checkForFailedMount(volumeToMount VolumeToMount, m
 func (og *operationGenerator) markDeviceErrorState(volumeToMount VolumeToMount, devicePath, deviceMountPath string, mountError error, actualStateOfWorld ActualStateOfWorldMounterUpdater) {
 	if volumetypes.IsOperationFinishedError(mountError) &&
 		actualStateOfWorld.GetDeviceMountState(volumeToMount.VolumeName) == DeviceMountUncertain {
+
+		if actualStateOfWorld.IsVolumeDeviceReconstructed(volumeToMount.VolumeName) {
+			klog.V(2).InfoS("MountVolume.markDeviceErrorState leaving volume uncertain", "volumeName", volumeToMount.VolumeName)
+			return
+		}
+
 		// Only devices which were uncertain can be marked as unmounted
 		markDeviceUnmountError := actualStateOfWorld.MarkDeviceAsUnmounted(volumeToMount.VolumeName)
 		if markDeviceUnmountError != nil {
@@ -1067,8 +1076,7 @@ func (og *operationGenerator) GenerateMapVolumeFunc(
 		migrated := getMigratedStatusBySpec(volumeToMount.VolumeSpec)
 
 		// Enforce ReadWriteOncePod access mode. This is also enforced during scheduling.
-		if utilfeature.DefaultFeatureGate.Enabled(features.ReadWriteOncePod) &&
-			actualStateOfWorld.IsVolumeMountedElsewhere(volumeToMount.VolumeName, volumeToMount.PodName) &&
+		if actualStateOfWorld.IsVolumeMountedElsewhere(volumeToMount.VolumeName, volumeToMount.PodName) &&
 			// Because we do not know what access mode the pod intends to use if there are multiple.
 			len(volumeToMount.VolumeSpec.PersistentVolume.Spec.AccessModes) == 1 &&
 			v1helper.ContainsAccessMode(volumeToMount.VolumeSpec.PersistentVolume.Spec.AccessModes, v1.ReadWriteOncePod) {
@@ -1556,14 +1564,6 @@ func (og *operationGenerator) GenerateVerifyControllerAttachedVolumeFunc(
 			return volumetypes.NewOperationContext(eventErr, detailedErr, migrated)
 		}
 
-		if node == nil {
-			// On failure, return error. Caller will log and retry.
-			eventErr, detailedErr := volumeToMount.GenerateError(
-				"VerifyControllerAttachedVolume failed",
-				fmt.Errorf("node object retrieved from API server is nil"))
-			return volumetypes.NewOperationContext(eventErr, detailedErr, migrated)
-		}
-
 		for _, attachedVolume := range node.Status.VolumesAttached {
 			if attachedVolume.Name == volumeToMount.VolumeName {
 				addVolumeNodeErr := actualStateOfWorld.MarkVolumeAsAttached(
@@ -1605,13 +1605,6 @@ func (og *operationGenerator) verifyVolumeIsSafeToDetach(
 
 		// On failure, return error. Caller will log and retry.
 		return volumeToDetach.GenerateErrorDetailed("DetachVolume failed fetching node from API server", fetchErr)
-	}
-
-	if node == nil {
-		// On failure, return error. Caller will log and retry.
-		return volumeToDetach.GenerateErrorDetailed(
-			"DetachVolume failed fetching node from API server",
-			fmt.Errorf("node object retrieved from API server is nil"))
 	}
 
 	for _, inUseVolume := range node.Status.VolumesInUse {
@@ -2073,16 +2066,17 @@ func (og *operationGenerator) expandVolumeDuringMount(volumeToMount VolumeToMoun
 			return false, fmt.Errorf("mountVolume.NodeExpandVolume get PVC failed : %v", err)
 		}
 
-		if volumeToMount.VolumeSpec.ReadOnly {
-			simpleMsg, detailedMsg := volumeToMount.GenerateMsg("MountVolume.NodeExpandVolume failed", "requested read-only file system")
-			klog.Warningf(detailedMsg)
-			og.recorder.Eventf(volumeToMount.Pod, v1.EventTypeWarning, kevents.FileSystemResizeFailed, simpleMsg)
-			og.recorder.Eventf(pvc, v1.EventTypeWarning, kevents.FileSystemResizeFailed, simpleMsg)
-			return true, nil
-		}
 		pvcStatusCap := pvc.Status.Capacity[v1.ResourceStorage]
 		pvSpecCap := pv.Spec.Capacity[v1.ResourceStorage]
 		if pvcStatusCap.Cmp(pvSpecCap) < 0 {
+			if volumeToMount.VolumeSpec.ReadOnly {
+				simpleMsg, detailedMsg := volumeToMount.GenerateMsg("MountVolume.NodeExpandVolume failed", "requested read-only file system")
+				klog.Warningf(detailedMsg)
+				og.recorder.Eventf(volumeToMount.Pod, v1.EventTypeWarning, kevents.FileSystemResizeFailed, simpleMsg)
+				og.recorder.Eventf(pvc, v1.EventTypeWarning, kevents.FileSystemResizeFailed, simpleMsg)
+				return true, nil
+			}
+
 			rsOpts.NewSize = pvSpecCap
 			rsOpts.OldSize = pvcStatusCap
 			resizeOp := nodeResizeOperationOpts{

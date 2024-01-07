@@ -50,32 +50,29 @@ const (
 // failed by this plugin schedulable.
 func (pl *NodeUnschedulable) EventsToRegister() []framework.ClusterEventWithHint {
 	return []framework.ClusterEventWithHint{
-		{Event: framework.ClusterEvent{Resource: framework.Node, ActionType: framework.Add | framework.UpdateNodeTaint}, QueueingHintFn: pl.isSchedulableAfterNodeChange},
+		{Event: framework.ClusterEvent{Resource: framework.Node, ActionType: framework.Add | framework.Update}, QueueingHintFn: pl.isSchedulableAfterNodeChange},
 	}
 }
 
 // isSchedulableAfterNodeChange is invoked for all node events reported by
 // an informer. It checks whether that change made a previously unschedulable
 // pod schedulable.
-func (pl *NodeUnschedulable) isSchedulableAfterNodeChange(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) framework.QueueingHint {
-	originalNode, modifiedNode, err := util.As[*v1.Node](oldObj, newObj)
+func (pl *NodeUnschedulable) isSchedulableAfterNodeChange(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
+	_, modifiedNode, err := util.As[*v1.Node](oldObj, newObj)
 	if err != nil {
-		logger.Error(err, "unexpected objects in isSchedulableAfterNodeChange", "oldObj", oldObj, "newObj", newObj)
-		return framework.QueueAfterBackoff
+		return framework.Queue, err
 	}
 
-	originalNodeSchedulable, modifiedNodeSchedulable := false, !modifiedNode.Spec.Unschedulable
-	if originalNode != nil {
-		originalNodeSchedulable = !originalNode.Spec.Unschedulable
+	if !modifiedNode.Spec.Unschedulable {
+		logger.V(5).Info("node was created or updated, pod may be schedulable now", "pod", klog.KObj(pod), "node", klog.KObj(modifiedNode))
+		return framework.Queue, nil
 	}
 
-	if !originalNodeSchedulable && modifiedNodeSchedulable {
-		logger.V(4).Info("node was created or updated, pod may be schedulable now", "pod", klog.KObj(pod), "node", klog.KObj(modifiedNode))
-		return framework.QueueAfterBackoff
-	}
+	// TODO: also check if the original node meets the pod's requestments once preCheck is completely removed.
+	// See: https://github.com/kubernetes/kubernetes/issues/110175
 
-	logger.V(4).Info("node was created or updated, but it doesn't make this pod schedulable", "pod", klog.KObj(pod), "node", klog.KObj(modifiedNode))
-	return framework.QueueSkip
+	logger.V(5).Info("node was created or updated, but it doesn't make this pod schedulable", "pod", klog.KObj(pod), "node", klog.KObj(modifiedNode))
+	return framework.QueueSkip, nil
 }
 
 // Name returns name of the plugin. It is used in logs, etc.
@@ -104,6 +101,6 @@ func (pl *NodeUnschedulable) Filter(ctx context.Context, _ *framework.CycleState
 }
 
 // New initializes a new plugin and returns it.
-func New(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+func New(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 	return &NodeUnschedulable{}, nil
 }
