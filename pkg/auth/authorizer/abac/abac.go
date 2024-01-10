@@ -76,8 +76,7 @@ func NewFromFile(path string) (PolicyList, error) {
 		i++
 		p := &abac.Policy{}
 		b := scanner.Bytes()
-
-		// skip comment lines and blank lines
+		
 		trimmed := strings.TrimSpace(string(b))
 		if len(trimmed) == 0 || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -133,7 +132,7 @@ func matches(p abac.Policy, a authorizer.Attributes) bool {
 	return false
 }
 
-// subjectMatches returns true if specified user and group properties in the policy match the attributes
+// subjectMatches returns true if specified user and group properties in the policy match the attributes.
 func subjectMatches(p abac.Policy, user user.Info) bool {
 	matched := false
 
