@@ -1,8 +1,8 @@
-//go:build linux
-// +build linux
+//go:build !linux
+// +build !linux
 
 /*
-Copyright 2018 The Kubernetes Authors.
+Copyright 2024 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,13 +17,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package eviction
+package inuserns
 
-// DefaultEvictionHard includes default options for hard eviction.
-var DefaultEvictionHard = map[string]string{
-	"memory.available":   "100Mi",
-	"nodefs.available":   "10%",
-	"nodefs.inodesFree":  "5%",
-	"imagefs.available":  "15%",
-	"imagefs.inodesFree": "5%",
+// RunningInUserNS detects whether the current process is running in a user namespace.
+func RunningInUserNS() bool {
+	return false
 }

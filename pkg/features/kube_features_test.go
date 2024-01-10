@@ -1,8 +1,5 @@
-//go:build linux
-// +build linux
-
 /*
-Copyright 2018 The Kubernetes Authors.
+Copyright 2024 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,13 +14,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package eviction
+package features
 
-// DefaultEvictionHard includes default options for hard eviction.
-var DefaultEvictionHard = map[string]string{
-	"memory.available":   "100Mi",
-	"nodefs.available":   "10%",
-	"nodefs.inodesFree":  "5%",
-	"imagefs.available":  "15%",
-	"imagefs.inodesFree": "5%",
+import (
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"testing"
+)
+
+func TestKubeFeatures(t *testing.T) {
+	features := utilfeature.DefaultFeatureGate.DeepCopy().GetAll()
+
+	for i := range features {
+		featureName := string(i)
+
+		if featureName == "AllAlpha" || featureName == "AllBeta" {
+			continue
+		}
+
+		if _, ok := defaultKubernetesFeatureGates[i]; !ok {
+			t.Errorf("The feature gate %q is not registered", featureName)
+		}
+	}
 }
