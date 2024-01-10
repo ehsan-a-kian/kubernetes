@@ -19,20 +19,20 @@ limitations under the License.
 package tools
 
 import (
-	// linting tools
+	// linting 
 	_ "github.com/aojea/sloppy-netparser"
 	_ "github.com/client9/misspell/cmd/misspell"
 	_ "github.com/golangci/golangci-lint/cmd/golangci-lint"
 	_ "honnef.co/go/tools/cmd/staticcheck"
 	_ "sigs.k8s.io/logtools/logcheck"
 
-	// benchmarking tools
+	// benchmarking 
 	_ "github.com/cespare/prettybench"
 	_ "gotest.tools/gotestsum"
 
 	// mockgen
 	_ "github.com/golang/mock/mockgen"
 
-	// tools like cpu
+	// cpu
 	_ "go.uber.org/automaxprocs"
 )
