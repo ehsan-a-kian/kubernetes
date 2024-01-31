@@ -421,6 +421,7 @@ const (
 	// owner: @alexanderConstantinescu
 	// kep: http://kep.k8s.io/3836
 	// alpha: v1.28
+	// beta: v1.30
 	//
 	// Implement connection draining for terminating nodes for
 	// `externalTrafficPolicy: Cluster` services.
@@ -545,6 +546,7 @@ const (
 	// owner: @RomanBednar
 	// kep: https://kep.k8s.io/3762
 	// alpha: v1.28
+	// beta: v1.29
 	//
 	// Adds a new field to persistent volumes which holds a timestamp of when the volume last transitioned its phase.
 	PersistentVolumeLastPhaseTransitionTime featuregate.Feature = "PersistentVolumeLastPhaseTransitionTime"
@@ -747,6 +749,7 @@ const (
 	// owner: @alexanderConstantinescu
 	// kep: http://kep.k8s.io/3458
 	// beta: v1.27
+	// GA: v1.30
 	//
 	// Enables less load balancer re-configurations by the service controller
 	// (KCCM) as an effect of changing node state.
@@ -1027,7 +1030,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	KubeletTracing: {Default: true, PreRelease: featuregate.Beta},
 
-	KubeProxyDrainingTerminatingNodes: {Default: false, PreRelease: featuregate.Alpha},
+	KubeProxyDrainingTerminatingNodes: {Default: true, PreRelease: featuregate.Beta},
 
 	LegacyServiceAccountTokenCleanUp: {Default: true, PreRelease: featuregate.Beta},
 
@@ -1111,7 +1114,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	SizeMemoryBackedVolumes: {Default: true, PreRelease: featuregate.Beta},
 
-	StableLoadBalancerNodeSet: {Default: true, PreRelease: featuregate.Beta},
+	StableLoadBalancerNodeSet: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // GA in 1.30, remove in 1.31
 
 	StatefulSetAutoDeletePVC: {Default: true, PreRelease: featuregate.Beta},
 
